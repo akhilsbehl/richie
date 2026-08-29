@@ -7,7 +7,7 @@ import { loadLocalImage, MediaError } from "./media.js";
 import { assertMarkdownFile, hasOpenOperations, newState, nextCommentedPath, readState, renderCommentedMarkdown, sha256, writeState } from "./store.js";
 import { ensureReviewDirectory, reviewSidecarPath } from "./paths.js";
 import { renderReviewHtml } from "./render.js";
-import type { ReviewOperation, ReviewState, Session } from "./types.js";
+import type { ReviewOperation, ReviewOutcome, ReviewState, Session } from "./types.js";
 
 const port = Number(process.env.RICHIE_HTTP_PORT ?? 43173);
 const socket = process.env.RICHIE_CONTROL_SOCKET ?? "/run/richie/control.sock";
@@ -202,8 +202,45 @@ export function renderReviewPage(session: Pick<Session, "id" | "token" | "source
 export class RichieService {
   private readonly sessions = new Map<string, Session>();
   private readonly byPath = new Map<string, string>();
+  private readonly waiters = new Map<string, Set<(outcome: ReviewOutcome) => void>>();
+  private readonly transitions = new Map<string, Promise<ReviewOutcome>>();
 
-  status(): { sessions: number; port: number } { return { sessions: this.sessions.size, port }; }
+  status(): { sessions: number; port: number } { return { sessions: this.byPath.size, port }; }
+
+  waitForResult(id: string, signal?: AbortSignal): Promise<ReviewOutcome | undefined> {
+    const session = this.sessions.get(id);
+    if (!session) return Promise.resolve(undefined);
+    if (session.outcome) return Promise.resolve(session.outcome);
+    return new Promise((resolvePromise) => {
+      const waiter = (outcome: ReviewOutcome): void => { cleanup(); resolvePromise(outcome); };
+      const cleanup = (): void => {
+        const current = this.waiters.get(id);
+        current?.delete(waiter);
+        if (current?.size === 0) this.waiters.delete(id);
+        signal?.removeEventListener("abort", aborted);
+      };
+      const aborted = (): void => { cleanup(); resolvePromise(undefined); };
+      const current = this.waiters.get(id) ?? new Set();
+      current.add(waiter); this.waiters.set(id, current);
+      signal?.addEventListener("abort", aborted, { once: true });
+      if (signal?.aborted) aborted();
+    });
+  }
+
+  private transition(session: Session, work: () => Promise<ReviewOutcome>): Promise<ReviewOutcome> {
+    if (session.outcome) return Promise.resolve(session.outcome);
+    const active = this.transitions.get(session.id);
+    if (active) return active;
+    const transition = work().then((outcome) => {
+      session.outcome = outcome;
+      this.byPath.delete(session.sourcePath);
+      for (const waiter of this.waiters.get(session.id) ?? []) waiter(outcome);
+      this.waiters.delete(session.id);
+      return outcome;
+    }).finally(() => this.transitions.delete(session.id));
+    this.transitions.set(session.id, transition);
+    return transition;
+  }
 
   async createSession(inputPath: string): Promise<{ id: string; url: string }> {
     const sourcePath = await realpath(inputPath);
@@ -299,19 +336,23 @@ export class RichieService {
       session.state.operations.push(operation); await writeState(session.sidecarPath, session.state); return send(response, 201, operation);
     }
     if (api[1] === "finish" && request.method === "POST") {
+      if (session.outcome) return send(response, 200, session.outcome);
       const source = await readFile(session.sourcePath, "utf8"); if (sha256(source) !== session.state.sourceSha256) return send(response, 409, { error: "Source changed during review; feedback was retained." });
-      if (!hasOpenOperations(session.state)) {
+      const outcome = await this.transition(session, async () => {
+        if (!hasOpenOperations(session.state)) {
+          await unlink(session.sidecarPath);
+          return { status: "finished", file: session.sourcePath };
+        }
+        const outputPath = await nextCommentedPath(session.sourcePath);
+        await writeFile(outputPath, renderCommentedMarkdown(source, session.state), "utf8");
         await unlink(session.sidecarPath);
-        this.sessions.delete(session.id); this.byPath.delete(session.sourcePath);
-        return send(response, 200, { exported: false, outputPath: null });
-      }
-      const outputPath = await nextCommentedPath(session.sourcePath); await writeFile(outputPath, renderCommentedMarkdown(source, session.state), "utf8"); await unlink(session.sidecarPath);
-      this.sessions.delete(session.id); this.byPath.delete(session.sourcePath); return send(response, 200, { exported: true, outputPath });
+        return { status: "finished", file: outputPath };
+      });
+      return send(response, 200, outcome);
     }
     if (api[1] === "abort" && request.method === "POST") {
-      await unlink(session.sidecarPath);
-      this.sessions.delete(session.id); this.byPath.delete(session.sourcePath);
-      return send(response, 200, { aborted: true });
+      const outcome = await this.transition(session, async () => { await unlink(session.sidecarPath); return { status: "aborted" }; });
+      return send(response, 200, outcome);
     }
     return send(response, 405, { error: "Method not allowed" });
   }
@@ -323,6 +364,17 @@ export async function startService(): Promise<void> {
   const web = createServer((request, response) => service.handle(request, response).catch((error: Error) => send(response, 500, { error: error.message })));
   const control = createServer((request, response) => {
     if (request.method === "GET" && request.url === "/status") return send(response, 200, service.status());
+    const result = request.url?.match(/^\/sessions\/([^/]+)\/result$/);
+    if (result) {
+      if (request.method !== "GET") return send(response, 405, { error: "Method not allowed" });
+      const abort = new AbortController();
+      response.once("close", () => abort.abort());
+      service.waitForResult(decodeURIComponent(result[1]), abort.signal).then((outcome) => {
+        if (!outcome) { if (!abort.signal.aborted) send(response, 404, { error: "Session not found" }); return; }
+        if (!response.destroyed) send(response, 200, outcome);
+      }).catch((error: Error) => { if (!response.destroyed) send(response, 500, { error: error.message }); });
+      return;
+    }
     if (request.method !== "POST" || request.url !== "/sessions") return send(response, 404, { error: "Not found" });
     body(request).then(async (input) => { const sourcePath = (input as { sourcePath?: unknown }).sourcePath; if (typeof sourcePath !== "string") return send(response, 400, { error: "sourcePath is required" }); return send(response, 201, await service.createSession(sourcePath)); }).catch((error: Error) => send(response, 400, { error: error.message }));
   });

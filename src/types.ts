@@ -22,6 +22,10 @@ export type ReviewOperation = {
   updatedAt?: string;
 };
 
+export type ReviewOutcome =
+  | { status: "finished"; file: string }
+  | { status: "aborted" };
+
 export type ReviewState = {
   schemaVersion: 1;
   source: string;
@@ -37,4 +41,5 @@ export type Session = {
   source: string;
   sidecarPath: string;
   state: ReviewState;
+  outcome?: ReviewOutcome;
 };

@@ -472,8 +472,12 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
   try {
     if (action === "finish") {
       if (!await modal({ title: "Finish review", message: "Open feedback will be exported and this tab will close.", confirmLabel: "Finish review" })) return;
-      const result = await post("finish", {}) as { exported: boolean; outputPath: string | null };
-      await modal({ title: "Review finished", message: result.exported ? `Review exported to ${result.outputPath}` : "No feedback was recorded. Nothing was exported.", confirmLabel: "OK" });
+      const result = await post("finish", {}) as { status: "finished"; file: string } | { status: "aborted" };
+      await modal({
+        title: result.status === "finished" ? "Review finished" : "Review aborted",
+        message: result.status === "finished" ? `Review result: ${result.file}` : "The review was already aborted.",
+        confirmLabel: "OK",
+      });
       window.close();
       return;
     }
