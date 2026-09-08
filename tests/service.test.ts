@@ -23,7 +23,10 @@ test("escapes reviewed file paths in breadcrumb markup", () => {
 
 test("renders an input dialog that can be resized and dragged", () => {
   const html = renderReviewPage({ id: "session-1", token: "token-1", sourcePath: "/work/draft-v00.md" }, "# Draft\n");
-  assert.match(html, /dialog\.input-dialog\{position:fixed;[^}]*resize:both;overflow:auto;transform:translate\(-50%,-50%\)/);
+  assert.match(html, /dialog\.input-dialog\{display:flex;flex-direction:column;position:fixed;[^}]*resize:both;overflow:auto;transform:translate\(-50%,-50%\)/);
+  assert.match(html, /dialog\.input-dialog form\{display:flex;flex:1;min-height:0;flex-direction:column\}/);
+  assert.match(html, /dialog\.input-dialog label\{flex:1;min-height:0\}/);
+  assert.match(html, /dialog\.input-dialog textarea\{flex:1;min-height:110px;resize:none\}/);
   assert.match(html, /dialog\.input-dialog h2\{cursor:move;touch-action:none\}/);
   assert.match(html, /id="richie-dialog-title" title="Drag to move this dialog"/);
 });

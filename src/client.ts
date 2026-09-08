@@ -51,6 +51,13 @@ dialogTitle.addEventListener("pointerdown", (event) => {
   dialogTitle.addEventListener("pointerup", stop);
   dialogTitle.addEventListener("pointercancel", stop);
 });
+function resetInputDialogGeometry(): void {
+  dialog.style.width = "";
+  dialog.style.height = "";
+  dialog.style.left = "";
+  dialog.style.top = "";
+  dialog.style.transform = "";
+}
 function modal(options: DialogOptions): Promise<string | boolean | undefined> {
   const collectsInput = Boolean(options.inputLabel);
   dialog.classList.toggle("input-dialog", collectsInput);
@@ -70,6 +77,7 @@ function modal(options: DialogOptions): Promise<string | boolean | undefined> {
   dialog.showModal();
   if (collectsInput) dialogInput.focus(); else dialogConfirm.focus();
   return new Promise((resolve) => dialog.addEventListener("close", () => {
+    if (collectsInput) resetInputDialogGeometry();
     if (dialog.returnValue !== "confirm") resolve(undefined);
     else resolve(collectsInput ? dialogInput.value : true);
   }, { once: true }));

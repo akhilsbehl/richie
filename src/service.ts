@@ -37,14 +37,17 @@ button{padding:7px 11px;border:1px solid var(--border);border-radius:7px;backgro
 button:hover{background:#eadfd2;border-color:var(--rose);transform:translateY(-1px)}
 button:focus-visible{outline:3px solid rgba(144,122,169,.35);outline-offset:2px}
 dialog{width:min(520px,calc(100vw - 32px));padding:0;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);box-shadow:0 18px 60px rgba(87,82,121,.28)}
-dialog.input-dialog{position:fixed;inset:50% auto auto 50%;margin:0;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);min-width:min(320px,calc(100vw - 16px));min-height:180px;resize:both;overflow:auto;transform:translate(-50%,-50%)}
+dialog.input-dialog{display:flex;flex-direction:column;position:fixed;inset:50% auto auto 50%;margin:0;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);min-width:min(320px,calc(100vw - 16px));min-height:180px;resize:both;overflow:auto;transform:translate(-50%,-50%)}
 dialog::backdrop{background:rgba(40,34,56,.38)}
 dialog form{padding:20px}
+dialog.input-dialog form{display:flex;flex:1;min-height:0;flex-direction:column}
 dialog h2{margin:0 0 8px;font-size:1.25rem}
 dialog.input-dialog h2{cursor:move;touch-action:none}
 dialog p{margin:0 0 16px;white-space:pre-wrap}
 dialog label{display:grid;gap:6px;margin:14px 0}
+dialog.input-dialog label{flex:1;min-height:0}
 dialog textarea{width:100%;min-height:110px;resize:vertical;padding:9px 11px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);font:inherit}
+dialog.input-dialog textarea{flex:1;min-height:110px;resize:none}
 dialog menu{display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin:18px 0 0;padding:0}
 dialog [hidden]{display:none}
 dialog button[value=confirm]{background:var(--pine);border-color:var(--pine);color:#fffaf3}
