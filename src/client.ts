@@ -26,7 +26,37 @@ const dialogField = dialog.querySelector<HTMLElement>("#richie-dialog-field")!;
 const dialogInput = dialog.querySelector<HTMLTextAreaElement>("#richie-dialog-input")!;
 const dialogConfirm = dialog.querySelector<HTMLButtonElement>("[value=confirm]")!;
 const dialogCancel = dialog.querySelector<HTMLButtonElement>("[value=cancel]")!;
+dialogTitle.addEventListener("pointerdown", (event) => {
+  if (!dialog.classList.contains("input-dialog") || event.button !== 0) return;
+  event.preventDefault();
+  const bounds = dialog.getBoundingClientRect();
+  const offsetX = event.clientX - bounds.left;
+  const offsetY = event.clientY - bounds.top;
+  dialog.style.left = `${bounds.left}px`;
+  dialog.style.top = `${bounds.top}px`;
+  dialog.style.transform = "none";
+  dialogTitle.setPointerCapture(event.pointerId);
+  const move = (moveEvent: PointerEvent) => {
+    const maxLeft = Math.max(8, window.innerWidth - dialog.offsetWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - dialog.offsetHeight - 8);
+    dialog.style.left = `${Math.min(Math.max(8, moveEvent.clientX - offsetX), maxLeft)}px`;
+    dialog.style.top = `${Math.min(Math.max(8, moveEvent.clientY - offsetY), maxTop)}px`;
+  };
+  const stop = () => {
+    dialogTitle.removeEventListener("pointermove", move);
+    dialogTitle.removeEventListener("pointerup", stop);
+    dialogTitle.removeEventListener("pointercancel", stop);
+  };
+  dialogTitle.addEventListener("pointermove", move);
+  dialogTitle.addEventListener("pointerup", stop);
+  dialogTitle.addEventListener("pointercancel", stop);
+});
 function modal(options: DialogOptions): Promise<string | boolean | undefined> {
+  const collectsInput = Boolean(options.inputLabel);
+  dialog.classList.toggle("input-dialog", collectsInput);
+  dialog.style.left = "";
+  dialog.style.top = "";
+  dialog.style.transform = "";
   dialogTitle.textContent = options.title;
   dialogMessage.textContent = options.message ?? "";
   dialogMessage.hidden = !options.message;
@@ -38,10 +68,10 @@ function modal(options: DialogOptions): Promise<string | boolean | undefined> {
   dialogCancel.hidden = options.confirmLabel === "OK";
   dialog.returnValue = "";
   dialog.showModal();
-  if (options.inputLabel) dialogInput.focus(); else dialogConfirm.focus();
+  if (collectsInput) dialogInput.focus(); else dialogConfirm.focus();
   return new Promise((resolve) => dialog.addEventListener("close", () => {
     if (dialog.returnValue !== "confirm") resolve(undefined);
-    else resolve(options.inputLabel ? dialogInput.value : true);
+    else resolve(collectsInput ? dialogInput.value : true);
   }, { once: true }));
 }
 dialog.addEventListener("keydown", (event) => {

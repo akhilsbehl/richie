@@ -31,4 +31,7 @@ test("bundles the targeted interaction regressions", async () => {
   assert.match(client, /reload-source/);
   assert.match(client, /reload",\s*\{\}/);
   assert.match(client, /insertAdjacentHTML/);
+  assert.match(client, /input-dialog/);
+  assert.match(client, /setPointerCapture/);
+  assert.match(client, /pointermove/);
 });
