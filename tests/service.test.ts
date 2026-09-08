@@ -21,12 +21,12 @@ test("escapes reviewed file paths in breadcrumb markup", () => {
   assert.match(html, /<span>&lt;draft&gt;\.md<\/span>/);
 });
 
-test("renders an input dialog that can be resized and dragged", () => {
+test("renders an input dialog that closes cleanly and uses its fixed geometry", () => {
   const html = renderReviewPage({ id: "session-1", token: "token-1", sourcePath: "/work/draft-v00.md" }, "# Draft\n");
-  assert.match(html, /dialog\.input-dialog\{display:flex;flex-direction:column;position:fixed;[^}]*resize:both;overflow:auto;transform:translate\(-50%,-50%\)/);
+  assert.match(html, /dialog\.input-dialog\[open\]\{display:flex;flex-direction:column;position:fixed;[^}]*width:min\(520px,calc\(100vw - 16px\)\);height:min\(360px,calc\(100vh - 16px\)\);[^}]*min-width:min\(520px,calc\(100vw - 16px\)\);min-height:min\(360px,calc\(100vh - 16px\)\);resize:both;overflow:auto;transform:translate\(-50%,-50%\)/);
   assert.match(html, /dialog\.input-dialog form\{display:flex;flex:1;min-height:0;flex-direction:column\}/);
-  assert.match(html, /dialog\.input-dialog label\{flex:1;min-height:0\}/);
-  assert.match(html, /dialog\.input-dialog textarea\{flex:1;min-height:110px;resize:none\}/);
+  assert.match(html, /dialog\.input-dialog label\{display:flex;flex:1;min-height:0;flex-direction:column\}/);
+  assert.match(html, /dialog\.input-dialog textarea\{flex:1;min-height:0;resize:none\}/);
   assert.match(html, /dialog\.input-dialog h2\{cursor:move;touch-action:none\}/);
   assert.match(html, /id="richie-dialog-title" title="Drag to move this dialog"/);
 });

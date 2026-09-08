@@ -61,9 +61,6 @@ function resetInputDialogGeometry(): void {
 function modal(options: DialogOptions): Promise<string | boolean | undefined> {
   const collectsInput = Boolean(options.inputLabel);
   dialog.classList.toggle("input-dialog", collectsInput);
-  dialog.style.left = "";
-  dialog.style.top = "";
-  dialog.style.transform = "";
   dialogTitle.textContent = options.title;
   dialogMessage.textContent = options.message ?? "";
   dialogMessage.hidden = !options.message;
@@ -77,9 +74,12 @@ function modal(options: DialogOptions): Promise<string | boolean | undefined> {
   dialog.showModal();
   if (collectsInput) dialogInput.focus(); else dialogConfirm.focus();
   return new Promise((resolve) => dialog.addEventListener("close", () => {
-    if (collectsInput) resetInputDialogGeometry();
-    if (dialog.returnValue !== "confirm") resolve(undefined);
-    else resolve(collectsInput ? dialogInput.value : true);
+    const result = dialog.returnValue === "confirm" ? collectsInput ? dialogInput.value : true : undefined;
+    if (collectsInput) {
+      dialog.classList.remove("input-dialog");
+      resetInputDialogGeometry();
+    }
+    resolve(result);
   }, { once: true }));
 }
 dialog.addEventListener("keydown", (event) => {
