@@ -18,7 +18,7 @@ const style = `
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:var(--base);color:var(--text);font:16px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 350px 56px;transition:padding-left .18s ease}
 body.navigation-collapsed{padding-left:48px}
-#document{max-width:900px;margin:0 auto}#html-artifact{display:block;width:100%;min-height:78vh;border:1px solid var(--border);background:#fff}
+#document{max-width:900px;margin:0 auto}#html-artifact{display:block;width:100%;height:calc(100dvh - 96px);min-height:78vh;border:1px solid var(--border);background:#fff}
 body.navigation-collapsed #document{max-width:none}
 #file-breadcrumb{display:flex;align-items:center;gap:8px;margin:0 0 22px;padding:5px 6px 5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);box-shadow:0 3px 12px rgba(87,82,121,.05);overflow:hidden;color:var(--subtle);font-size:.78rem;line-height:1.3}
 #file-breadcrumb ol{display:flex;flex:1;align-items:center;min-width:0;margin:0;padding:0;list-style:none}
