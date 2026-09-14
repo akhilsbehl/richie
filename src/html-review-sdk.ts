@@ -29,7 +29,6 @@ function installStyles() {
       outline: 3px solid #2563eb !important;
       outline-offset: 3px !important;
       box-shadow: 0 0 0 6px rgb(37 99 235 / 18%) !important;
-      cursor: crosshair !important;
     }
     .richie-html-ui {
       display: flex;
@@ -63,13 +62,6 @@ function installStyles() {
       outline: 3px solid rgb(144 122 169 / 35%);
       outline-offset: 2px;
     }
-    .richie-html-ui button:nth-child(3) {
-      border-color: #b4637a;
-      background: #b4637a;
-      color: #fffaf3;
-    }
-    .richie-html-ui button:nth-child(3):hover,
-    .richie-html-ui button:nth-child(3):focus-visible { background: #9f5369; }
   `;
   document.head.append(styles);
 }
