@@ -1,10 +1,11 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { constants as fsConstants } from "node:fs";
 import { chmod, mkdir, readFile, rm, realpath, writeFile, rename, open } from "node:fs/promises";
 import { basename, dirname, join, resolve, relative, extname, isAbsolute, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadLocalImage, MediaError } from "./media.js";
-import { documentKindForPath, hasOpenOperations, newState, nextCommentedPath, readSourceSnapshot, readState, renderCommentedMarkdown, sha256, writeState } from "./store.js";
+import { documentKindForPath, hasOpenOperations, newState, nextCommentedPath, readSourceSnapshot, readState, renderCommentedMarkdown, writeState } from "./store.js";
 import { parseHtmlTarget } from "./html-target.js";
 import { ensureReviewDirectory, htmlCommentedPath, reviewSidecarPath } from "./paths.js";
 import { renderReviewHtml } from "./render.js";
@@ -200,10 +201,25 @@ async function body(request: IncomingMessage): Promise<unknown> {
 function bodyEndIndex(html: string): number {
   // Tokenise raw-text elements and comments so a literal </body> in a script
   // cannot become the injection point. The last real body close is the stable
-  // insertion point for otherwise-readable HTML.
-  const tokens = /<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>[\s\S]*?<\/style\s*>|<!--[\s\S]*?-->|<\/body\s*>/gi;
+  // insertion point for otherwise-readable HTML, including unclosed raw text.
+  const token = /<!--|<script\b[^>]*>|<style\b[^>]*>|<\/body\s*>/gi;
   let match: RegExpExecArray | null; let close = -1;
-  while ((match = tokens.exec(html))) if (/^<\/body/i.test(match[0])) close = match.index;
+  while ((match = token.exec(html))) {
+    if (match[0] === "<!--") {
+      const end = html.indexOf("-->", token.lastIndex);
+      if (end < 0) return close;
+      token.lastIndex = end + 3;
+      continue;
+    }
+    if (/^<script/i.test(match[0]) || /^<style/i.test(match[0])) {
+      const name = /^<script/i.test(match[0]) ? "script" : "style";
+      const end = new RegExp(`</${name}\\s*>`, "ig").exec(html.slice(token.lastIndex));
+      if (!end) return close;
+      token.lastIndex += end.index + end[0].length;
+      continue;
+    }
+    close = match.index;
+  }
   return close;
 }
 export function injectSdk(html: string, url: string): string {
@@ -260,8 +276,11 @@ async function readConfinedAsset(root: string, relativePath: string): Promise<{ 
     if (resolvedRelative === "" || resolvedRelative.startsWith(`..${sep}`) || isAbsolute(resolvedRelative)) return undefined;
     const contentType = mime(resolved);
     if (!contentType) return undefined;
-    const handle = await open(resolved, "r");
+    const handle = await open(resolved, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     try {
+      const opened = await realpath(`/proc/self/fd/${handle.fd}`);
+      const openedRelative = relative(root, opened);
+      if (opened !== resolved || openedRelative === "" || openedRelative.startsWith(`..${sep}`) || isAbsolute(openedRelative)) return undefined;
       const details = await handle.stat();
       if (!details.isFile()) return undefined;
       return { body: await handle.readFile(), contentType };
@@ -327,7 +346,7 @@ export class RichieService {
     const documentKind = documentKindForPath(sourcePath);
     await ensureReviewDirectory();
     const sidecarPath = reviewSidecarPath(sourcePath, snapshot.sourceSha256);
-    const state = (await readState(sidecarPath, sourcePath)) ?? newState(sourcePath, snapshot.source);
+    const state = (await readState(sidecarPath, sourcePath)) ?? newState(sourcePath, snapshot.source, snapshot.sourceSha256);
     if (state.sourceSha256 !== snapshot.sourceSha256 || state.documentKind !== documentKind) throw new Error("The existing review sidecar targets a different source version or document kind. Finish or remove it before starting a new review.");
     const session: Session = { id: randomUUID(), token: randomUUID(), sourcePath, source: snapshot.source, documentKind, artifactNonce: randomUUID(), sidecarPath, state };
     this.sessions.set(session.id, session); this.byPath.set(sourcePath, session.id);
@@ -383,8 +402,8 @@ export class RichieService {
     }
     if (match && request.method === "GET") {
       const session = this.session(match[1], url.searchParams.get("token")); if (!session) return send(response, 404, { error: "Session not found" });
-      const currentSource = await readFile(session.sourcePath, "utf8");
-      const stale = sha256(currentSource) !== session.state.sourceSha256;
+      const currentSource = await readSourceSnapshot(session.sourcePath);
+      const stale = currentSource.sourceSha256 !== session.state.sourceSha256;
       return send(response, 200, renderReviewPage(session, session.source, stale), "text/html");
     }
     if (media) {
@@ -407,7 +426,7 @@ export class RichieService {
       if (sidecarPath !== session.sidecarPath) await rm(session.sidecarPath, { force: true });
       session.source = snapshot.source;
       session.artifactNonce = randomUUID();
-      session.state = newState(session.sourcePath, snapshot.source);
+      session.state = newState(session.sourcePath, snapshot.source, snapshot.sourceSha256);
       session.sidecarPath = sidecarPath;
       await writeState(sidecarPath, session.state);
       return send(response, 200, { reloaded: true, sourceSha256: snapshot.sourceSha256 });

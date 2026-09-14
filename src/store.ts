@@ -13,7 +13,7 @@ type MarkdownNode = {
   position?: { start: { offset: number }; end: { offset: number } };
 };
 
-export const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+export const sha256 = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
 
 export function documentKindForPath(sourcePath: string): "markdown" | "html" {
   const extension = extname(sourcePath).toLowerCase();
@@ -27,12 +27,14 @@ export async function assertReviewFile(sourcePath: string): Promise<string> {
 export const assertMarkdownFile = assertReviewFile;
 
 export async function readSourceSnapshot(sourcePath: string): Promise<{ source: string; sourceSha256: string }> {
-  const source = await assertReviewFile(sourcePath);
-  return { source, sourceSha256: sha256(source) };
+  documentKindForPath(sourcePath);
+  await access(sourcePath, constants.R_OK);
+  const bytes = await readFile(sourcePath);
+  return { source: bytes.toString("utf8"), sourceSha256: sha256(bytes) };
 }
 
-export function newState(sourcePath: string, source: string): ReviewState {
-  return { schemaVersion: 1, source: sourcePath, documentKind: documentKindForPath(sourcePath), sourceSha256: sha256(source), createdAt: new Date().toISOString(), operations: [] };
+export function newState(sourcePath: string, source: string, sourceSha256 = sha256(source)): ReviewState {
+  return { schemaVersion: 1, source: sourcePath, documentKind: documentKindForPath(sourcePath), sourceSha256, createdAt: new Date().toISOString(), operations: [] };
 }
 
 export function hasOpenOperations(state: ReviewState): boolean {

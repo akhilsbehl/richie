@@ -20,7 +20,7 @@ npm run review -- --json tests/fixtures/html-review/report.html
 
 Keep browser console and network logs open. Record errors, warnings, failed
 requests, screenshots for visual claims, viewport size, and before/after byte
-count plus SHA-256. Do not copy
+count plus SHA-256 of the raw source bytes. Do not copy
 `/home/akhil/warchives/unilever-dt-workshop/project/deliverables/20260912-unilever-global-dt-agentic-foundations-deck/deck.html`
 into this repository.
 
@@ -69,10 +69,12 @@ Using `tests/fixtures/html-review/report.html`:
 Verify wrong token/host/session, wrong index nonce, non-GET artifact requests,
 missing files, directories, lexical and percent-encoded `..`, backslashes,
 NUL/absolute paths, unknown extensions, and outside-root symlinks all fail
-closed. Valid CSS/JS/image/font assets have exact MIME, `Cache-Control:
-no-store`, and `X-Content-Type-Options: nosniff`. Capture the artifact CSP and
-confirm every blocked capability is explicit. Search artifact HTML, SDK URL,
-and captured message payloads for the review token; it must be absent.
+closed, including a symlink swap during an asset request. Valid CSS/JS/image/font
+assets have exact MIME, `Cache-Control: no-store`, and
+`X-Content-Type-Options: nosniff`. Capture the artifact CSP and confirm every
+blocked capability is explicit. Search artifact HTML, SDK URL, and captured
+message payloads for the review token; it must be absent. Reload the artifact
+frame and verify a ready/message from the previous frame generation is ignored.
 
 Mutate the canonical file after creating an operation. Confirm the shell still
 shows the captured snapshot with a stale banner; operation and Finish return

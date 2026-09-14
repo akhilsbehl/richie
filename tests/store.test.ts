@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { commentedPath, reviewSidecarPath } from "../src/paths.js";
-import { hasOpenOperations, newState, renderCommentedMarkdown, sha256 } from "../src/store.js";
+import { hasOpenOperations, newState, readSourceSnapshot, renderCommentedMarkdown, sha256 } from "../src/store.js";
 
 test("derives hashed temporary sidecar and commented paths", () => {
   const sourcePath = "/work/draft-v03.md";
@@ -12,6 +15,23 @@ test("derives hashed temporary sidecar and commented paths", () => {
   assert.notEqual(reviewSidecarPath(sourcePath, sourceHash), reviewSidecarPath(sourcePath, "another-file-content-hash"));
   assert.equal(commentedPath("/work/draft-v03.md"), "/work/draft-v03-commented.md");
   assert.equal(commentedPath("/work/draft-v03.md", 2), "/work/draft-v03-commented-2.md");
+});
+
+test("hashes the exact source bytes while exposing a decoded review snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "richie-byte-snapshot-"));
+  const sourcePath = join(root, "report.html");
+  try {
+    const first = Buffer.from([0x3c, 0x70, 0x3e, 0xff, 0x3c, 0x2f, 0x70, 0x3e]);
+    const second = Buffer.from([0x3c, 0x70, 0x3e, 0xfe, 0x3c, 0x2f, 0x70, 0x3e]);
+    await writeFile(sourcePath, first);
+    const firstSnapshot = await readSourceSnapshot(sourcePath);
+    assert.equal(firstSnapshot.source, "<p>�</p>");
+    assert.equal(firstSnapshot.sourceSha256, createHash("sha256").update(first).digest("hex"));
+    await writeFile(sourcePath, second);
+    const secondSnapshot = await readSourceSnapshot(sourcePath);
+    assert.equal(secondSnapshot.source, firstSnapshot.source);
+    assert.notEqual(secondSnapshot.sourceSha256, firstSnapshot.sourceSha256);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("exports range and document annotations without changing source text", () => {

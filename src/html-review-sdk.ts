@@ -9,29 +9,72 @@ const randomCapability = (): string => {
   try { return globalThis.crypto.randomUUID(); } catch { return `frame-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; }
 };
 const frameCapability = randomCapability();
+let frameChallenge: string | undefined;
 const cap = (value: string, max: number = 2048): string => value.slice(0, max);
 const normalizeHtmlText = (value: string, max = 2048): string => value.replace(/\s+/g, " ").trim().slice(0, max);
 const evidence = (value: string, max = 2048): string => normalizeHtmlText(cap(value, max), max);
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const validPath = (value: unknown): value is number[] => Array.isArray(value) && value.length <= 64 && value.every((part) => Number.isInteger(part) && part >= 0 && part < 100000);
+const selectorDepth = (selector: string): number => {
+  let depth = 1; let square = 0; let paren = 0; let quote = ""; let escaped = false; let pendingSpace = false; let compound = false;
+  for (const character of selector) {
+    if (escaped) { escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (quote) { if (character === quote) quote = ""; continue; }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === "[") { square += 1; compound = true; continue; }
+    if (character === "]") { square = Math.max(0, square - 1); continue; }
+    if (character === "(") { paren += 1; compound = true; continue; }
+    if (character === ")") { paren = Math.max(0, paren - 1); continue; }
+    if (square || paren) continue;
+    if (/\s/.test(character)) { pendingSpace = true; continue; }
+    if (character === ">" || character === "+" || character === "~") { depth += 1; compound = false; pendingSpace = false; continue; }
+    if (pendingSpace && compound) { depth += 1; compound = false; }
+    pendingSpace = false; compound = true;
+  }
+  return depth;
+};
+const validSelector = (value: unknown): value is string => {
+  if (typeof value !== "string" || !value.trim() || value.length > 1024 || value.includes(",") || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  let quote = ""; let escaped = false; const stack: string[] = [];
+  for (const character of value) {
+    if (escaped) { escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (quote) { if (character === quote) quote = ""; continue; }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === "[" || character === "(") stack.push(character);
+    else if (character === "]" || character === ")") { if (!stack.length || (character === "]" ? stack.pop() !== "[" : stack.pop() !== "(")) return false; }
+  }
+  if (quote || escaped || stack.length > 0 || selectorDepth(value) > 16) return false;
+  escaped = false;
+  for (const character of value) {
+    if (escaped) { escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (!/[A-Za-z0-9_*#.:>+~\-\[\]()='"\s]/.test(character)) return false;
+  }
+  return !escaped;
+};
 const validRect = (value: unknown): value is HtmlRect => {
   if (!isRecord(value) || !isRecord(value.viewport) || !isRecord(value.document) || !isRecord(value.viewportSize)) return false;
-  const part = (candidate: Record<string, unknown>) => ["x", "y", "width", "height"].every((key) => typeof candidate[key] === "number" && Number.isFinite(candidate[key]) && Number(candidate[key]) >= 0 && Number(candidate[key]) < 10000000);
-  return part(value.viewport) && part(value.document) && typeof value.viewportSize.width === "number" && value.viewportSize.width > 0 && typeof value.viewportSize.height === "number" && value.viewportSize.height > 0;
+  const part = (candidate: Record<string, unknown>) => ["x", "y", "width", "height"].every((key) => {
+    const number = candidate[key];
+    return typeof number === "number" && Number.isFinite(number) && (key === "x" || key === "y" ? Math.abs(number) < 10000000 : number >= 0 && number < 10000000);
+  });
+  return part(value.viewport) && part(value.document) && typeof value.viewportSize.width === "number" && Number.isFinite(value.viewportSize.width) && value.viewportSize.width > 0 && value.viewportSize.width < 100000 && typeof value.viewportSize.height === "number" && Number.isFinite(value.viewportSize.height) && value.viewportSize.height > 0 && value.viewportSize.height < 100000;
 };
 const parseHtmlTarget = (value: unknown): HtmlTarget | undefined => {
-  if (!isRecord(value) || typeof value.type !== "string" || typeof value.selector !== "string" || !value.selector || value.selector.length > 1024 || !validRect(value.rect)) return undefined;
+  if (!isRecord(value) || typeof value.type !== "string" || !validSelector(value.selector) || !validRect(value.rect)) return undefined;
   const allowed = (keys: string[]) => Object.keys(value).every((key) => keys.includes(key));
   if (value.type === "html-element" && allowed(["type", "selector", "path", "tag", "text", "rect"]) && validPath(value.path) && typeof value.tag === "string" && /^[a-z][a-z0-9-]*$/i.test(value.tag) && typeof value.text === "string" && value.text.length <= 2048 && value.text) return { type: "html-element", selector: value.selector, path: [...value.path], tag: value.tag.toLowerCase(), text: evidence(value.text), rect: value.rect };
-  if (value.type === "html-text-range" && allowed(["type", "selector", "commonAncestorSelector", "start", "end", "text", "exactText", "rect"]) && typeof value.commonAncestorSelector === "string" && value.commonAncestorSelector.length > 0 && value.commonAncestorSelector.length <= 1024 && typeof value.text === "string" && typeof value.exactText === "string" && value.text.length <= 2048 && value.exactText.length <= 2048 && value.exactText && isRecord(value.start) && isRecord(value.end)) {
-    const parseBoundary = (candidate: Record<string, unknown>): HtmlBoundary | undefined => typeof candidate.selector === "string" && candidate.selector.length > 0 && candidate.selector.length <= 1024 && validPath(candidate.path) && Number.isInteger(candidate.offset) && Number(candidate.offset) >= 0 && Number(candidate.offset) < 10000000 ? { selector: candidate.selector, path: [...candidate.path as number[]], offset: Number(candidate.offset) } : undefined;
+  if (value.type === "html-text-range" && allowed(["type", "selector", "commonAncestorSelector", "start", "end", "text", "exactText", "rect"]) && validSelector(value.commonAncestorSelector) && value.selector === value.commonAncestorSelector && typeof value.text === "string" && typeof value.exactText === "string" && value.text.length <= 2048 && value.exactText.length <= 2048 && value.exactText && isRecord(value.start) && isRecord(value.end)) {
+    const parseBoundary = (candidate: Record<string, unknown>): HtmlBoundary | undefined => validSelector(candidate.selector) && validPath(candidate.path) && Number.isInteger(candidate.offset) && Number(candidate.offset) >= 0 && Number(candidate.offset) < 10000000 ? { selector: candidate.selector as string, path: [...candidate.path as number[]], offset: Number(candidate.offset) } : undefined;
     const start = parseBoundary(value.start); const end = parseBoundary(value.end); if (!start || !end || start.selector === end.selector && JSON.stringify(start.path) === JSON.stringify(end.path) && end.offset <= start.offset) return undefined;
     return { type: "html-text-range", selector: value.selector, commonAncestorSelector: value.commonAncestorSelector, start, end, text: evidence(value.text), exactText: value.exactText, rect: value.rect };
   }
   if (value.type === "mermaid-node" && allowed(["type", "diagramId", "nodeId", "label", "selector", "rect"]) && [value.diagramId, value.nodeId, value.label].every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 2048)) return { type: "mermaid-node", diagramId: value.diagramId as string, nodeId: value.nodeId as string, label: value.label as string, selector: value.selector, rect: value.rect };
   return undefined;
 };
-const post = (message: Record<string, unknown>): void => parent.postMessage({ ...message, correlation, frameCapability }, "*");
+const post = (message: Record<string, unknown>): void => parent.postMessage({ ...message, correlation, frameCapability, ...(frameChallenge ? { frameChallenge } : {}) }, "*");
 
 function cssEscape(value: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
@@ -201,7 +244,7 @@ function resolveTarget(target: HtmlTarget): { element?: Element; range?: Range }
     return { element: node };
   }
   const commonAncestor = resolveSelector(target.commonAncestorSelector);
-  if (!commonAncestor) return undefined;
+  if (!commonAncestor || element !== commonAncestor) return undefined;
   const startRoot = resolveSelector(target.start.selector);
   const endRoot = resolveSelector(target.end.selector);
   if (!startRoot || !endRoot) return undefined;
@@ -265,6 +308,21 @@ function feedbackIdsForTarget(target: EventTarget | null): string[] {
   return element?.dataset.richieFeedbackIds?.split(/\s+/).filter(Boolean) ?? [];
 }
 
+type MermaidFallbackNode = { id: string; label: string };
+function mermaidFallbackNodes(source: string): MermaidFallbackNode[] {
+  const nodes = new Map<string, MermaidFallbackNode>();
+  const labelled = /([A-Za-z][\w-]*)\s*(?:\[\[([^\]]+)\]\]|\(\(([^)]+)\)\)|\{\{([^}]+)\}\}|\{([^}]+)\}|\[([^\]]+)\]|\(([^)]+)\))/g;
+  for (const match of source.matchAll(labelled)) {
+    const label = match.slice(2).find((value): value is string => typeof value === "string") ?? match[1];
+    nodes.set(match[1], { id: match[1], label });
+  }
+  const edges = source.replace(/\|[^|\n]*\|/g, " ");
+  const edgePattern = /\b([A-Za-z][\w-]*)\b\s*(?:[-=:.]{2,}>|[-=:.]{3,})\s*\b([A-Za-z][\w-]*)\b/g;
+  for (const match of edges.matchAll(edgePattern)) {
+    for (const id of [match[1], match[2]]) if (!nodes.has(id)) nodes.set(id, { id, label: id });
+  }
+  return [...nodes.values()];
+}
 function renderMermaidFallback(): void {
   document.querySelectorAll<HTMLElement>(".mermaid, [data-mermaid]").forEach((container, index) => {
     if (container.dataset.richieMermaidProcessed || container.querySelector("svg")) return;
@@ -272,7 +330,11 @@ function renderMermaidFallback(): void {
     if (!source) return;
     container.dataset.richieMermaidProcessed = "true";
     const diagramId = container.dataset.diagramId || container.id || `mermaid-diagram-${index + 1}`;
-    const nodes = [...source.matchAll(/(?:^|\n|--)\s*([A-Za-z][\w-]*)\s*\[([^\]]+)\]/g)].map((match) => ({ id: match[1], label: match[2] }));
+    const nodes = mermaidFallbackNodes(source);
+    if (!nodes.length) {
+      const lines = source.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^(graph|flowchart)\b/i.test(line));
+      lines.forEach((line, lineIndex) => nodes.push({ id: `line-${lineIndex + 1}`, label: line.slice(0, 2048) }));
+    }
     if (!nodes.length) {
       const note = document.createElement("p"); note.textContent = "Mermaid preview unavailable; source retained below."; container.prepend(note); return;
     }
@@ -322,12 +384,22 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault(); post({ type: "richie-html-target", kind, target: candidate });
 });
 
-function announceReady(): void { post({ type: "richie-html-ready" }); }
-const readyTimer = window.setInterval(announceReady, 250);
-announceReady();
+function announceReady(): void { if (frameChallenge) post({ type: "richie-html-ready", frameChallenge }); }
+let readyTimer: number | undefined;
+function startReadyAnnouncements(challenge: string): void {
+  frameChallenge = challenge;
+  window.clearInterval(readyTimer);
+  announceReady();
+  readyTimer = window.setInterval(announceReady, 250);
+}
 window.addEventListener("message", (event) => {
-  if (event.source !== parent || !isRecord(event.data) || event.data.correlation !== correlation || event.data.frameCapability !== frameCapability) return;
-  if (event.data.type === "richie-html-operations") { window.clearInterval(readyTimer); showAnnotations(event.data.operations); return; }
+  if (event.source !== parent || !isRecord(event.data) || event.data.correlation !== correlation) return;
+  if (event.data.type === "richie-html-handshake") {
+    if (typeof event.data.frameChallenge === "string" && event.data.frameChallenge.length >= 16 && event.data.frameChallenge.length <= 256) startReadyAnnouncements(event.data.frameChallenge);
+    return;
+  }
+  if (!frameChallenge || event.data.frameChallenge !== frameChallenge || event.data.frameCapability !== frameCapability) return;
+  if (event.data.type === "richie-html-operations") { window.clearInterval(readyTimer); readyTimer = undefined; showAnnotations(event.data.operations); return; }
   if (event.data.type !== "richie-html-jump" || typeof event.data.operationId !== "string") return;
   const target = parseHtmlTarget(event.data.target);
   const result = target ? resolveTarget(target) : undefined;

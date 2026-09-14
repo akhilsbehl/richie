@@ -19,7 +19,7 @@ async function fetchIndex(state: Awaited<ReturnType<typeof run>>): Promise<strin
 async function close(state: Awaited<ReturnType<typeof run>>): Promise<void> { await new Promise<void>((resolve) => state.server.close(() => resolve())); await rm(state.root, { recursive: true, force: true }); }
 
 test("artifact injection handles no-body and malformed readable HTML without selecting script literals", async () => {
-  for (const source of ["<p>fragment</p>", "<html><body><script>const body = '</body>';</script><p>malformed"]) {
+  for (const source of ["<p>fragment</p>", "<html><body><script>const body = '</body>';</script><p>malformed", "<html><body><script>const body = '</body>';"]) {
     const state = await run(source);
     try {
       const before = await readFile(state.path, "utf8"); const output = await fetchIndex(state);

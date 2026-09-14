@@ -24,6 +24,10 @@ type DialogOptions = { title: string; message?: string; inputLabel?: string; inp
 let activeHtmlOperations: Operation[] = [];
 let annotationSyncTimer: number | undefined;
 let htmlFrameCapability: string | undefined;
+let htmlFrameChallenge: string | undefined;
+const randomHtmlFrameChallenge = (): string => {
+  try { return globalThis.crypto.randomUUID(); } catch { return `load-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; }
+};
 const htmlResolution = new Map<string, "pending" | "resolved" | "unresolved">();
 const pendingHtmlJumps = new Map<string, number>();
 const htmlSyncTimeout = 3_500;
@@ -336,7 +340,7 @@ function htmlFrame(): HTMLIFrameElement | undefined { return document.querySelec
 function syncHtmlAnnotations(operations = activeHtmlOperations): void {
   if (context.documentKind !== "html" || !htmlFrameCapability) return;
   htmlFrame()?.contentWindow?.postMessage({
-    type: "richie-html-operations", correlation: context.artifactNonce, frameCapability: htmlFrameCapability,
+    type: "richie-html-operations", correlation: context.artifactNonce, frameCapability: htmlFrameCapability, frameChallenge: htmlFrameChallenge,
     operations: operations.filter((operation) => operation.status === "open" && operation.target).map(({ id, kind, target, replacement }) => ({ id, kind, target, replacement })),
   }, "*");
 }
@@ -359,7 +363,7 @@ function scheduleHtmlAnnotationSync(): void {
 function jumpToHtmlTarget(operationId: string, target: HtmlTarget): void {
   window.clearInterval(pendingHtmlJumps.get(operationId));
   let attempts = 0;
-  const send = () => htmlFrame()?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.artifactNonce, frameCapability: htmlFrameCapability, operationId, target }, "*");
+  const send = () => htmlFrame()?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.artifactNonce, frameCapability: htmlFrameCapability, frameChallenge: htmlFrameChallenge, operationId, target }, "*");
   send();
   pendingHtmlJumps.set(operationId, window.setInterval(() => { send(); if (++attempts >= 20) { window.clearInterval(pendingHtmlJumps.get(operationId)); pendingHtmlJumps.delete(operationId); htmlResolution.set(operationId, "unresolved"); renderFeedback(activeHtmlOperations); } }, 150));
 }
@@ -591,21 +595,26 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
   } catch (error) { await modal({ title: "Richie could not complete the action", message: (error as Error).message, confirmLabel: "OK" }); }
 });
 if (context.documentKind === "html") {
-  document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => {
+  const beginHtmlFrameHandshake = (): void => {
     htmlFrameCapability = undefined;
+    htmlFrameChallenge = randomHtmlFrameChallenge();
     htmlResolution.forEach((_value, id) => { if (activeHtmlOperations.some((operation) => operation.id === id)) htmlResolution.set(id, "pending"); });
+    htmlFrame()?.contentWindow?.postMessage({ type: "richie-html-handshake", correlation: context.artifactNonce, frameChallenge: htmlFrameChallenge }, "*");
     scheduleHtmlAnnotationSync();
-  });
+  };
+  const frame = htmlFrame();
+  frame?.addEventListener("load", beginHtmlFrameHandshake);
+  window.setTimeout(() => { if (!htmlFrameChallenge) beginHtmlFrameHandshake(); }, 0);
   window.addEventListener("message", async (event) => {
     const frame = htmlFrame();
     if (event.source !== frame?.contentWindow || !event.data || typeof event.data !== "object" || Array.isArray(event.data)) return;
     const message = event.data as Record<string, unknown>;
     if (message.correlation !== context.artifactNonce || typeof message.type !== "string") return;
     if (message.type === "richie-html-ready") {
-      if (typeof message.frameCapability !== "string" || message.frameCapability.length < 8 || message.frameCapability.length > 256) return;
+      if (!htmlFrameChallenge || message.frameChallenge !== htmlFrameChallenge || typeof message.frameCapability !== "string" || message.frameCapability.length < 8 || message.frameCapability.length > 256) return;
       htmlFrameCapability = message.frameCapability; scheduleHtmlAnnotationSync(); return;
     }
-    if (!htmlFrameCapability || message.frameCapability !== htmlFrameCapability) return;
+    if (!htmlFrameCapability || message.frameChallenge !== htmlFrameChallenge || message.frameCapability !== htmlFrameCapability) return;
     if (message.type === "richie-html-annotations-applied") {
       const resolvedIds = Array.isArray(message.resolvedIds) ? message.resolvedIds.filter((id): id is string => typeof id === "string") : [];
       const unresolvedIds = Array.isArray(message.unresolvedIds) ? message.unresolvedIds.filter((id): id is string => typeof id === "string") : [];

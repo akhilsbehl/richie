@@ -60,7 +60,8 @@ test("HTML artifact is an immutable session snapshot with confined assets and ex
 test("HTML target API is total, scope-aware, stale-safe, and exports atomically", async () => {
   const state = await setup("<!doctype html><html><body><p id=\"target\">Target text</p></body></html>");
   const base = `/api/operations/${state.id}?token=${encodeURIComponent(state.token)}`;
-  const malformed = [null, { kind: "comment", scope: "block", target: null, comment: "x" }, { kind: "comment", scope: "range", target: target() }, { kind: "comment", scope: "block", target: { ...target(), rect: { ...rect, viewport: { ...point, width: -1 } } }, comment: "x" }, { kind: "comment", scope: "block", target: target(), comment: "" }];
+  const deepSelector = Array.from({ length: 17 }, () => "div").join(" > ");
+  const malformed = [null, { kind: "comment", scope: "block", target: null, comment: "x" }, { kind: "comment", scope: "range", target: target() }, { kind: "comment", scope: "block", target: { ...target(), selector: "!!!" }, comment: "x" }, { kind: "comment", scope: "block", target: { ...target(), selector: "   " }, comment: "x" }, { kind: "comment", scope: "block", target: { ...target(), selector: deepSelector }, comment: "x" }, { kind: "comment", scope: "block", target: { ...target(), rect: { ...rect, viewport: { ...point, width: -1 } } }, comment: "x" }, { kind: "comment", scope: "block", target: target(), comment: "" }];
   try {
     for (const payload of malformed) assert.equal((await call(state.server, base, "POST", payload)).status, 400);
     assert.deepEqual(JSON.parse((await call(state.server, `/api/state/${state.id}?token=${encodeURIComponent(state.token)}`)).body.toString()).operations, []);

@@ -11,6 +11,7 @@ export const HTML_LIMITS = {
   coordinate: 10_000_000,
   viewport: 100_000,
   offset: 10_000_000,
+  selectorDepth: 16,
 } as const;
 
 type RecordValue = Record<string, unknown>;
@@ -34,7 +35,8 @@ function validRectPart(value: unknown): value is { x: number; y: number; width: 
   if (!isRecord(value)) return false;
   return ["x", "y", "width", "height"].every((key) => {
     const number = value[key];
-    return typeof number === "number" && Number.isFinite(number) && number >= 0 && number < HTML_LIMITS.coordinate;
+    if (typeof number !== "number" || !Number.isFinite(number)) return false;
+    return key === "x" || key === "y" ? Math.abs(number) < HTML_LIMITS.coordinate : number >= 0 && number < HTML_LIMITS.coordinate;
   });
 }
 
@@ -46,9 +48,30 @@ export function isValidHtmlRect(value: unknown): value is HtmlRect {
     && typeof height === "number" && Number.isFinite(height) && height > 0 && height < HTML_LIMITS.viewport;
 }
 
+function selectorDepth(selector: string): number {
+  let depth = 1; let square = 0; let paren = 0; let quote = ""; let escaped = false;
+  let pendingSpace = false; let compound = false;
+  for (const character of selector) {
+    if (escaped) { escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (quote) { if (character === quote) quote = ""; continue; }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === "[") { square += 1; compound = true; continue; }
+    if (character === "]") { square = Math.max(0, square - 1); continue; }
+    if (character === "(") { paren += 1; compound = true; continue; }
+    if (character === ")") { paren = Math.max(0, paren - 1); continue; }
+    if (square || paren) continue;
+    if (/\s/.test(character)) { pendingSpace = true; continue; }
+    if (character === ">" || character === "+" || character === "~") { depth += 1; compound = false; pendingSpace = false; continue; }
+    if (pendingSpace && compound) { depth += 1; compound = false; }
+    pendingSpace = false; compound = true;
+  }
+  return depth;
+}
+
 function validSelector(value: unknown): value is string {
   const selector = boundedString(value, HTML_LIMITS.selector);
-  if (selector === undefined || /[\u0000-\u001f\u007f]/.test(selector)) return false;
+  if (selector === undefined || !selector.trim() || selector.includes(",") || /[\u0000-\u001f\u007f]/.test(selector)) return false;
   let quote = ""; let escaped = false; const stack: string[] = [];
   for (const character of selector) {
     if (escaped) { escaped = false; continue; }
@@ -58,7 +81,14 @@ function validSelector(value: unknown): value is string {
     if (character === "[" || character === "(") stack.push(character);
     else if (character === "]" || character === ")") { if (!stack.length || (character === "]" ? stack.pop() !== "[" : stack.pop() !== "(")) return false; }
   }
-  return !quote && !escaped && stack.length === 0;
+  if (quote || escaped || stack.length > 0 || selectorDepth(selector) > HTML_LIMITS.selectorDepth) return false;
+  escaped = false;
+  for (const character of selector) {
+    if (escaped) { escaped = false; continue; }
+    if (character === "\\") { escaped = true; continue; }
+    if (!/[A-Za-z0-9_*#.:>+~\-\[\]()='"\s]/.test(character)) return false;
+  }
+  return !escaped;
 }
 
 function validTag(value: unknown): value is string {
@@ -86,7 +116,7 @@ export function parseHtmlTarget(value: unknown): HtmlTarget | undefined {
   }
   if (value.type === "html-text-range") {
     if (!ownKeys(value, ["type", "selector", "commonAncestorSelector", "start", "end", "text", "exactText", "rect"])
-      || !validSelector(value.commonAncestorSelector) || !validBoundary(value.start) || !validBoundary(value.end)) return undefined;
+      || !validSelector(value.commonAncestorSelector) || value.selector !== value.commonAncestorSelector || !validBoundary(value.start) || !validBoundary(value.end)) return undefined;
     const text = boundedString(value.text, HTML_LIMITS.text);
     const exactText = boundedString(value.exactText, HTML_LIMITS.text);
     if (text === undefined || exactText === undefined || exactText.length === 0) return undefined;
