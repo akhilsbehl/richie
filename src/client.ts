@@ -21,6 +21,8 @@ type HtmlTarget = { type: "html-element" | "html-text-range" | "mermaid-node"; s
 type Operation = { id: string; kind: "delete" | "replace" | "comment"; status: string; scope: string; range?: Range; target?: HtmlTarget; comment?: string; replacement?: string; quote?: string };
 type DialogOptions = { title: string; message?: string; inputLabel?: string; inputValue?: string; confirmLabel?: string; destructive?: boolean };
 let activeHtmlOperations: Operation[] = [];
+let annotationSyncTimer: number | undefined;
+const pendingHtmlJumps = new Map<string, number>();
 const dialog = document.querySelector<HTMLDialogElement>("#richie-dialog")!;
 const dialogTitle = dialog.querySelector<HTMLElement>("#richie-dialog-title")!;
 const dialogMessage = dialog.querySelector<HTMLElement>("#richie-dialog-message")!;
@@ -234,7 +236,7 @@ function renderFeedback(operations: Operation[]): void {
     if (operation.quote) { const quote = document.createElement("q"); quote.className = "operation-quote"; quote.textContent = operation.quote; card.append(quote); }
     const detail = document.createElement("p"); detail.className = "operation-detail"; detail.textContent = operationSummary(operation); card.append(detail);
     const actions = document.createElement("div"); actions.className = "operation-actions";
-    if (operation.range || operation.target) { const jump = document.createElement("button"); jump.textContent = "Jump to target"; jump.addEventListener("click", () => { if (operation.target) document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.artifactNonce, target: operation.target }, "*"); else operationTarget(operation)?.scrollIntoView({ behavior: "smooth", block: "center" }); }); actions.append(jump); }
+    if (operation.range || operation.target) { const jump = document.createElement("button"); jump.textContent = "Jump to target"; jump.addEventListener("click", () => { if (operation.target) jumpToHtmlTarget(operation.target); else operationTarget(operation)?.scrollIntoView({ behavior: "smooth", block: "center" }); }); actions.append(jump); }
     if (operation.kind !== "delete") {
       const edit = document.createElement("button"); edit.textContent = "Edit";
       edit.addEventListener("click", async () => {
@@ -319,7 +321,22 @@ function syncHtmlAnnotations(operations = activeHtmlOperations): void {
     operations: operations.filter((operation) => operation.status === "open" && operation.target).map(({ id, kind, target }) => ({ id, kind, target })),
   }, "*");
 }
-async function refresh(): Promise<void> { const state = await fetch(endpoint("state")).then((response) => response.json()) as { operations: Operation[] }; activeHtmlOperations = state.operations; renderFeedback(state.operations); applyReviewPresentation(state.operations); renderOutline(); syncHtmlAnnotations(); }
+function scheduleHtmlAnnotationSync(): void {
+  if (context.documentKind !== "html") return;
+  window.clearInterval(annotationSyncTimer);
+  let attempts = 0;
+  syncHtmlAnnotations();
+  annotationSyncTimer = window.setInterval(() => { syncHtmlAnnotations(); if (++attempts === 20) window.clearInterval(annotationSyncTimer); }, 150);
+}
+function jumpToHtmlTarget(target: HtmlTarget): void {
+  const key = target.selector;
+  window.clearInterval(pendingHtmlJumps.get(key));
+  let attempts = 0;
+  const send = () => document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.artifactNonce, target }, "*");
+  send();
+  pendingHtmlJumps.set(key, window.setInterval(() => { send(); if (++attempts === 20) window.clearInterval(pendingHtmlJumps.get(key)); }, 150));
+}
+async function refresh(): Promise<void> { const state = await fetch(endpoint("state")).then((response) => response.json()) as { operations: Operation[] }; activeHtmlOperations = state.operations; renderFeedback(state.operations); applyReviewPresentation(state.operations); renderOutline(); scheduleHtmlAnnotationSync(); }
 function revealFeedback(ids: string[]): void {
   const cards = ids.map((id) => document.getElementById(`feedback-${id}`)).filter((card): card is HTMLElement => card instanceof HTMLElement);
   if (!cards.length) return;
@@ -547,12 +564,14 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
   } catch (error) { await modal({ title: "Richie could not complete the action", message: (error as Error).message, confirmLabel: "OK" }); }
 });
 if (context.documentKind === "html") {
-  document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => syncHtmlAnnotations());
+  document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => scheduleHtmlAnnotationSync());
   window.addEventListener("message", async (event) => {
   const frame = document.querySelector<HTMLIFrameElement>("#html-artifact"); const message = event.data as { type?: string; correlation?: string; kind?: string; target?: HtmlTarget; selector?: string; resolved?: boolean };
   if (event.source !== frame?.contentWindow || message.correlation !== context.artifactNonce) return;
-  if (message.type === "richie-html-ready") { syncHtmlAnnotations(); return; }
+  if (message.type === "richie-html-ready") { scheduleHtmlAnnotationSync(); return; }
+  if (message.type === "richie-html-annotations-applied") { window.clearInterval(annotationSyncTimer); return; }
   if (message.type === "richie-html-resolved") {
+    window.clearInterval(pendingHtmlJumps.get(message.selector ?? ""));
     if (!message.resolved) document.querySelectorAll<HTMLElement>(".operation-card").forEach(card => { if (card.textContent?.includes(message.selector ?? "")) card.dataset.unresolved = "true"; });
     return;
   }

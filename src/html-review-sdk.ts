@@ -155,11 +155,15 @@ const readyTimer = window.setInterval(announceReady, 250);
 function showAnnotations(operations: unknown) {
   window.clearInterval(readyTimer);
   document.querySelectorAll(".richie-html-annotated-target").forEach(element => element.classList.remove("richie-html-annotated-target"));
-  if (!Array.isArray(operations)) return;
-  operations.forEach((operation) => {
-    const target = (operation as { target?: unknown }).target;
-    if (target && typeof target === "object") resolve(target as Record<string, unknown>)?.classList.add("richie-html-annotated-target");
+  const resolved: string[] = [];
+  if (Array.isArray(operations)) operations.forEach((operation) => {
+    const item = operation as { id?: unknown; target?: unknown };
+    if (item.target && typeof item.target === "object") {
+      const element = resolve(item.target as Record<string, unknown>);
+      if (element) { element.classList.add("richie-html-annotated-target"); if (typeof item.id === "string") resolved.push(item.id); }
+    }
   });
+  parent.postMessage({type:"richie-html-annotations-applied",correlation,resolved},"*");
 }
 window.addEventListener("message",e=>{
   const data=e.data as {correlation?:string;type?:string;target?:Record<string,unknown>;operations?:unknown};
