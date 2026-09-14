@@ -39,3 +39,9 @@ The unit uses the currently installed Node 22 binary under Akhil's NVM installat
 Check it with `systemctl status richie` and inspect logs with `journalctl -u richie`. Stop it with `sudo systemctl disable --now richie`.
 
 The service keeps WSL running while enabled. Review JSON files are ignored by Git and are deleted only after a successful `Finish review` action. Richie asks for confirmation before finishing, closes the review tab after the response, and does not export a file when there is no open feedback. The agent reviews and commits the resulting `draft-vNN-commented.md` file.
+
+## HTML review
+
+Richie also reviews local `.html` and `.htm` artifacts without modifying them. HTML is rendered in an opaque-origin `sandbox="allow-scripts"` iframe; only same-directory assets are served, and feedback is exported on Finish as `<name>-commented.json` beside the canonical HTML. The JSON contains SHA-256-bound element or text-range targets. Scripted artifacts continue to run, but forms, popups, navigation, downloads, cross-origin frames, and privileged API access are intentionally blocked.
+
+Revision log: 2026-09-14 — added secure HTML review and JSON handoff.

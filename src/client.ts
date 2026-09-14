@@ -1,7 +1,7 @@
 import mermaid from "mermaid";
 import { sourceText, type RenderedTextPart } from "./source-offset.js";
 
-declare global { interface Window { __RICHIE__: { id: string; token: string } } }
+declare global { interface Window { __RICHIE__: { id: string; token: string; documentKind?: "markdown" | "html" } } }
 const context = window.__RICHIE__;
 const navigation = document.querySelector<HTMLElement>("#navigation")!;
 const navigationToggle = document.querySelector<HTMLButtonElement>("#navigation-toggle")!;
@@ -17,7 +17,8 @@ const endpoint = (name: string) => `/api/${name}/${context.id}?token=${encodeURI
 const operationEndpoint = (id: string) => `/api/operations/${context.id}/${encodeURIComponent(id)}?token=${encodeURIComponent(context.token)}`;
 type Position = { offset: number; line: number; column: number };
 type Range = { start: Position; end: Position };
-type Operation = { id: string; kind: "delete" | "replace" | "comment"; status: string; scope: string; range?: Range; comment?: string; replacement?: string; quote?: string };
+type HtmlTarget = { type: "html-element" | "html-text-range" | "mermaid-node"; selector: string; text: string; [key: string]: unknown };
+type Operation = { id: string; kind: "delete" | "replace" | "comment"; status: string; scope: string; range?: Range; target?: HtmlTarget; comment?: string; replacement?: string; quote?: string };
 type DialogOptions = { title: string; message?: string; inputLabel?: string; inputValue?: string; confirmLabel?: string; destructive?: boolean };
 const dialog = document.querySelector<HTMLDialogElement>("#richie-dialog")!;
 const dialogTitle = dialog.querySelector<HTMLElement>("#richie-dialog-title")!;
@@ -228,10 +229,11 @@ function renderFeedback(operations: Operation[]): void {
   open.forEach((operation) => {
     const card = document.createElement("article"); card.className = "operation-card"; card.dataset.kind = operation.kind; card.id = `feedback-${operation.id}`; card.tabIndex = -1;
     const meta = document.createElement("div"); meta.className = "operation-meta"; meta.append(operation.id, document.createTextNode(`${operation.kind} · ${operation.scope}`)); card.append(meta);
+    if (operation.target) { const target = document.createElement("small"); target.textContent = `${operation.target.type}: ${excerpt(operation.target.text)}`; card.append(target); }
     if (operation.quote) { const quote = document.createElement("q"); quote.className = "operation-quote"; quote.textContent = operation.quote; card.append(quote); }
     const detail = document.createElement("p"); detail.className = "operation-detail"; detail.textContent = operationSummary(operation); card.append(detail);
     const actions = document.createElement("div"); actions.className = "operation-actions";
-    if (operation.range) { const jump = document.createElement("button"); jump.textContent = "Jump to text"; jump.addEventListener("click", () => operationTarget(operation)?.scrollIntoView({ behavior: "smooth", block: "center" })); actions.append(jump); }
+    if (operation.range || operation.target) { const jump = document.createElement("button"); jump.textContent = "Jump to target"; jump.addEventListener("click", () => { if (operation.target) document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.id, selector: operation.target.selector }, "*"); else operationTarget(operation)?.scrollIntoView({ behavior: "smooth", block: "center" }); }); actions.append(jump); }
     if (operation.kind !== "delete") {
       const edit = document.createElement("button"); edit.textContent = "Edit";
       edit.addEventListener("click", async () => {
@@ -533,6 +535,11 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
       await refresh();
     }
   } catch (error) { await modal({ title: "Richie could not complete the action", message: (error as Error).message, confirmLabel: "OK" }); }
+});
+if (context.documentKind === "html") window.addEventListener("message", async (event) => {
+  const frame = document.querySelector<HTMLIFrameElement>("#html-artifact"); const message = event.data as { type?: string; correlation?: string; kind?: string; target?: HtmlTarget };
+  if (event.source !== frame?.contentWindow || message.type !== "richie-html-target" || message.correlation !== context.id || !message.target || !message.kind) return;
+  try { let input: string | boolean | undefined = true; if (message.kind === "comment") input = await modal({ title:"Add comment", inputLabel:"Comment", confirmLabel:"Add comment" }); else if (message.kind === "replace") input = await modal({ title:"Replace", inputLabel:"Replacement", confirmLabel:"Replace" }); if (input === undefined || (typeof input === "string" && !input.trim())) return; await post("operations", { kind: message.kind, scope: "range", target: message.target, ...(message.kind === "comment" ? {comment: input} : message.kind === "replace" ? {replacement: input} : {}) }); await refresh(); } catch (error) { await modal({title:"Richie could not save the review",message:(error as Error).message,confirmLabel:"OK"}); }
 });
 refresh();
 setupCopyButtons();

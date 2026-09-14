@@ -486,3 +486,9 @@ The source renderer must be tested against the exact Markdown conventions in exi
 Build this as a narrow Markdown review layer.
 
 The smallest valuable product is source-aware rendered Markdown plus structured suggestions and comments in a committed JSON sidecar. Prove that this reduces review friction on several real documents before adding collaboration, automation, or richer visual features.
+
+## HTML review (2026-09-14)
+
+HTML sessions are admitted for `.html`/`.htm`, have `documentKind: "html"`, render in an opaque-origin scripted iframe, and export only a hash-bound `-commented.json` operation handoff. Artifact assets are confined to the source directory by lexical and realpath checks.
+
+Revision log: 2026-09-14 — added HTML artifact review contract.

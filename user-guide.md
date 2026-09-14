@@ -81,3 +81,9 @@ sudo systemctl enable --now richie
 ```
 
 The unit points to the current Node 22 path in `packaging/richie.service`. Update it if that installation moves.
+
+## HTML artifacts
+
+Run `richie review --json report.html` exactly as for Markdown. Select rendered text or click an element, choose Comment, Replace, or Delete, then Finish. Richie never edits the HTML: Finish writes `report-commented.json` with source hash and structured targets. The artifact is sandboxed; local relative assets work, while forms, popups, downloads, top navigation, nested frames, shadow-DOM contents, and remote active content are not review targets.
+
+Revision log: 2026-09-14 — documented HTML review handoff.

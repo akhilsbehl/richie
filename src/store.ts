@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { access, readFile, rename, writeFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { constants } from "node:fs";
 import { commentedPath, reviewSidecarPath } from "./paths.js";
 import { parseMarkdown } from "./render.js";
@@ -13,14 +14,19 @@ type MarkdownNode = {
 
 export const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
-export async function assertMarkdownFile(sourcePath: string): Promise<string> {
-  if (!sourcePath.endsWith(".md")) throw new Error("Richie accepts Markdown files ending in .md");
-  await access(sourcePath, constants.R_OK);
-  return readFile(sourcePath, "utf8");
+export function documentKindForPath(sourcePath: string): "markdown" | "html" {
+  const extension = extname(sourcePath).toLowerCase();
+  if (extension === ".md") return "markdown";
+  if (extension === ".html" || extension === ".htm") return "html";
+  throw new Error("Richie accepts .md, .html, and .htm files");
 }
+export async function assertReviewFile(sourcePath: string): Promise<string> {
+  documentKindForPath(sourcePath); await access(sourcePath, constants.R_OK); return readFile(sourcePath, "utf8");
+}
+export const assertMarkdownFile = assertReviewFile;
 
 export function newState(sourcePath: string, source: string): ReviewState {
-  return { schemaVersion: 1, source: sourcePath, sourceSha256: sha256(source), createdAt: new Date().toISOString(), operations: [] };
+  return { schemaVersion: 1, source: sourcePath, documentKind: documentKindForPath(sourcePath), sourceSha256: sha256(source), createdAt: new Date().toISOString(), operations: [] };
 }
 
 export function hasOpenOperations(state: ReviewState): boolean {
