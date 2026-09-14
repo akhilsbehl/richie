@@ -10,7 +10,15 @@ function ignored(e:Element|null|undefined) { return !e || e.closest(".richie-htm
 
 const targetClass = "richie-html-hover-target";
 let hoveredTarget: Element | undefined;
+let pendingTarget: Element | undefined;
 let hideMenuTimer: number | undefined;
+let showMenuTimer: number | undefined;
+
+function cancelMenuShow() {
+  window.clearTimeout(showMenuTimer);
+  showMenuTimer = undefined;
+  pendingTarget = undefined;
+}
 
 function installStyles() {
   if (document.getElementById("richie-html-review-styles")) return;
@@ -82,6 +90,7 @@ function scheduleMenuHide(target: Element, menu: HTMLElement) {
 }
 
 function menu(target:Record<string,unknown>, r:DOMRect, highlighted?: Element) {
+  cancelMenuShow();
   window.clearTimeout(hideMenuTimer);
   document.querySelector(".richie-html-ui")?.remove();
   if (highlighted) {
@@ -98,6 +107,7 @@ function menu(target:Record<string,unknown>, r:DOMRect, highlighted?: Element) {
     const b=document.createElement("button");
     b.type="button";
     b.textContent=kind[0].toUpperCase()+kind.slice(1);
+    b.addEventListener("mousedown", event => event.preventDefault());
     b.onclick=()=>parent.postMessage({type:"richie-html-target",correlation,kind,target},"*");
     m.append(b);
   }
@@ -117,7 +127,20 @@ document.addEventListener("pointerover", event => {
   if (!el || ignored(el) || el === hoveredTarget) return;
   const selection = getSelection();
   if (selection && !selection.isCollapsed) return;
-  menu(elementTarget(el), el.getBoundingClientRect(), el);
+
+  // Match Richie's Markdown handoff: wait before moving the menu. This gives
+  // the pointer time to cross the small gap into the existing action menu.
+  cancelMenuShow();
+  pendingTarget = el;
+  showMenuTimer = window.setTimeout(() => {
+    showMenuTimer = undefined;
+    pendingTarget = undefined;
+    if (el.matches(":hover")) menu(elementTarget(el), el.getBoundingClientRect(), el);
+  }, 220);
+});
+document.addEventListener("pointerout", event => {
+  const el = (event.target as Element | null)?.closest("*");
+  if (el && pendingTarget === el) cancelMenuShow();
 });
 
 document.addEventListener("mouseup",()=>setTimeout(()=>{
