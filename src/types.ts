@@ -49,6 +49,7 @@ export type Session = {
   sourcePath: string;
   source: string;
   documentKind: DocumentKind;
+  artifactNonce: string;
   sidecarPath: string;
   state: ReviewState;
   outcome?: ReviewOutcome;

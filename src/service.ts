@@ -1,5 +1,5 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { chmod, mkdir, readFile, rm, realpath, unlink, writeFile, stat } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, realpath, unlink, writeFile, stat, rename } from "node:fs/promises";
 import { basename, dirname, join, resolve, relative, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -201,11 +201,11 @@ function parseRange(value: unknown): ReviewOperation["range"] | undefined {
   return { start: { offset: candidate.start.offset, line: candidate.start.line ?? 0, column: candidate.start.column ?? 0 }, end: { offset: candidate.end.offset, line: candidate.end.line ?? 0, column: candidate.end.column ?? 0 } };
 }
 
-export function renderReviewPage(session: Pick<Session, "id" | "token" | "sourcePath"> & Partial<Pick<Session, "documentKind">>, source: string, stale = false): string {
+export function renderReviewPage(session: Pick<Session, "id" | "token" | "sourcePath"> & Partial<Pick<Session, "documentKind" | "artifactNonce">>, source: string, stale = false): string {
   const isHtml = session.documentKind === "html";
   const banner = stale ? `<div id="stale-banner"><span>The ${isHtml ? "HTML " : "Markdown "}source changed after this review started. Highlights may be misaligned and new feedback is blocked. Restore the source or abort the review.</span><button type="button" data-action="reload-source">Reload new draft</button></div>` : "";
   const localImageUrl = (path: string): string => `/api/media/${encodeURIComponent(session.id)}?token=${encodeURIComponent(session.token)}&path=${encodeURIComponent(path)}`;
-  return `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Richie: ${session.sourcePath}</title><style>${style}</style>${banner}<aside id="panel"><div id="toolbar"><button id="navigation-toggle" type="button" aria-controls="navigation" aria-expanded="true">Hide navigation</button><button data-action="document-note">Document level note</button><button data-action="abort">Abort review</button><button data-action="finish">Finish review</button></div><div class="panel-heading"><strong>Review feedback</strong><span id="feedback-count" aria-live="polite">0 open</span></div><div id="operations"></div></aside><aside id="navigation"><a id="guide-link" href="/guide" target="_blank" rel="noreferrer">User guide</a><div class="search-box" role="search"><label for="document-search"><span>Find in document</span></label><input id="document-search" type="search" placeholder="Search…" autocomplete="off"><output id="search-count" aria-live="polite"></output><button data-action="search-previous" aria-label="Previous search match">Previous match</button><button data-action="search-next" aria-label="Next search match">Next match</button></div><nav id="outline" aria-label="Document outline"><strong>Document outline</strong><div id="outline-items"></div></nav></aside><main id="document">${renderFileBreadcrumb(session.sourcePath)}${isHtml ? `<iframe id="html-artifact" title="Reviewed HTML artifact" sandbox="allow-scripts" src="/artifact/${session.id}/index.html" referrerpolicy="no-referrer"></iframe>` : renderReviewHtml(source, { localImageUrl })}</main><dialog id="richie-dialog"><form method="dialog"><h2 id="richie-dialog-title" title="Drag to move this dialog"></h2><p id="richie-dialog-message"></p><label id="richie-dialog-field"><span></span><textarea id="richie-dialog-input"></textarea></label><menu><button value="confirm">Confirm</button><button value="cancel">Cancel</button></menu></form></dialog><script>window.__RICHIE__=${JSON.stringify({ id: session.id, token: session.token, documentKind: session.documentKind ?? "markdown" })}</script><script type="module" src="/assets/client.js"></script>`;
+  return `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Richie: ${session.sourcePath}</title><style>${style}</style>${banner}<aside id="panel"><div id="toolbar"><button id="navigation-toggle" type="button" aria-controls="navigation" aria-expanded="true">Hide navigation</button><button data-action="document-note">Document level note</button><button data-action="abort">Abort review</button><button data-action="finish">Finish review</button></div><div class="panel-heading"><strong>Review feedback</strong><span id="feedback-count" aria-live="polite">0 open</span></div><div id="operations"></div></aside><aside id="navigation"><a id="guide-link" href="/guide" target="_blank" rel="noreferrer">User guide</a><div class="search-box" role="search"><label for="document-search"><span>Find in document</span></label><input id="document-search" type="search" placeholder="Search…" autocomplete="off"><output id="search-count" aria-live="polite"></output><button data-action="search-previous" aria-label="Previous search match">Previous match</button><button data-action="search-next" aria-label="Next search match">Next match</button></div><nav id="outline" aria-label="Document outline"><strong>Document outline</strong><div id="outline-items"></div></nav></aside><main id="document">${renderFileBreadcrumb(session.sourcePath)}${isHtml ? `<iframe id="html-artifact" title="Reviewed HTML artifact" sandbox="allow-scripts" src="/artifact/${session.id}/index.html?n=${encodeURIComponent(session.artifactNonce ?? session.id)}" referrerpolicy="no-referrer"></iframe>` : renderReviewHtml(source, { localImageUrl })}</main><dialog id="richie-dialog"><form method="dialog"><h2 id="richie-dialog-title" title="Drag to move this dialog"></h2><p id="richie-dialog-message"></p><label id="richie-dialog-field"><span></span><textarea id="richie-dialog-input"></textarea></label><menu><button value="confirm">Confirm</button><button value="cancel">Cancel</button></menu></form></dialog><script>window.__RICHIE__=${JSON.stringify({ id: session.id, token: session.token, documentKind: session.documentKind ?? "markdown", artifactNonce: session.artifactNonce ?? session.id })}</script><script type="module" src="/assets/client.js"></script>`;
 }
 
 export class RichieService {
@@ -263,7 +263,7 @@ export class RichieService {
     const state = (await readState(sidecarPath)) ?? newState(sourcePath, source);
     if (state.sourceSha256 !== sourceHash) throw new Error("The existing review sidecar targets a different source version. Finish or remove it before starting a new review.");
     state.documentKind ??= documentKind;
-    const session: Session = { id: randomUUID(), token: randomUUID(), sourcePath, source, documentKind, sidecarPath, state };
+    const session: Session = { id: randomUUID(), token: randomUUID(), sourcePath, source, documentKind, artifactNonce: randomUUID(), sidecarPath, state };
     this.sessions.set(session.id, session); this.byPath.set(sourcePath, session.id);
     await writeState(sidecarPath, state);
     return { id: session.id, url: this.url(session) };
@@ -284,7 +284,7 @@ export class RichieService {
     }
     if (artifact && request.method === "GET") {
       const session = this.sessions.get(artifact[1]); if (!session || session.documentKind !== "html") return send(response, 404, { error: "Artifact not found" });
-      if (artifact[2] === "index.html") { const sdk = `/assets/html-review-sdk.js?c=${encodeURIComponent(session.id)}`; const output = injectSdk(await readFile(session.sourcePath, "utf8"), sdk); response.writeHead(200, { "content-type":"text/html", "cache-control":"no-store", "content-security-policy":"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'", "x-content-type-options":"nosniff" }); response.end(output); return; }
+      if (artifact[2] === "index.html") { const nonce = url.searchParams.get("n"); if (nonce !== session.artifactNonce) return send(response, 404, { error: "Artifact not found" }); const sdk = `/assets/html-review-sdk.js?c=${encodeURIComponent(session.artifactNonce)}`; const output = injectSdk(await readFile(session.sourcePath, "utf8"), sdk); response.writeHead(200, { "content-type":"text/html", "cache-control":"no-store", "content-security-policy":"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'", "x-content-type-options":"nosniff" }); response.end(output); return; }
       const relativePath = artifact[2]; if (!relativePath || relativePath.includes("\\") || relativePath.split("/").includes("..")) return send(response, 404, { error:"Asset not found" });
       const root = dirname(session.sourcePath); const lexical = resolve(root, relativePath); if (relative(root, lexical).startsWith("..")) return send(response, 404,{error:"Asset not found"});
       try { const resolved = await realpath(lexical); if (relative(root, resolved).startsWith("..") || (await stat(resolved)).isDirectory()) return send(response,404,{error:"Asset not found"}); const bytes=await readFile(resolved); response.writeHead(200,{"content-type":mime(resolved),"content-length":bytes.length,"cache-control":"no-store","x-content-type-options":"nosniff"}); response.end(bytes); return; } catch { return send(response,404,{error:"Asset not found"}); }
@@ -318,6 +318,7 @@ export class RichieService {
       const sidecarPath = reviewSidecarPath(session.sourcePath, sha256(source));
       if (sidecarPath !== session.sidecarPath) await unlink(session.sidecarPath);
       session.source = source;
+      session.artifactNonce = randomUUID();
       session.state = newState(session.sourcePath, source);
       session.sidecarPath = sidecarPath;
       await writeState(sidecarPath, session.state);
@@ -365,7 +366,7 @@ export class RichieService {
           return { status: "finished", file: session.sourcePath };
         }
         const outputPath = session.documentKind === "html" ? htmlCommentedPath(session.sourcePath) : await nextCommentedPath(session.sourcePath);
-        if (session.documentKind === "html") await writeFile(outputPath, `${JSON.stringify({ source: session.sourcePath, documentKind: "html", sourceSha256: session.state.sourceSha256, createdAt: session.state.createdAt, operations: session.state.operations.filter(operation => operation.status === "open") }, null, 2)}\n`, "utf8");
+        if (session.documentKind === "html") { const temporary = `${outputPath}.${randomUUID()}.tmp`; await writeFile(temporary, `${JSON.stringify({ source: session.sourcePath, documentKind: "html", sourceSha256: session.state.sourceSha256, createdAt: session.state.createdAt, operations: session.state.operations.filter(operation => operation.status === "open") }, null, 2)}\n`, { mode: 0o600 }); await rename(temporary, outputPath); }
         else await writeFile(outputPath, renderCommentedMarkdown(source, session.state), "utf8");
         await unlink(session.sidecarPath);
         return { status: "finished", file: outputPath };
