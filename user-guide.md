@@ -1,10 +1,10 @@
 # Richie user guide
 
-Richie is a local visual review surface for Markdown. Markdown remains canonical. Richie records review operations in a temporary sidecar and exports a commented copy for an agent to apply to the next Markdown version.
+Richie is a local visual review surface for Markdown and local HTML. Each source remains canonical. Markdown records ranges and exports a commented copy; HTML records DOM evidence in a temporary sidecar and exports only a structured JSON handoff.
 
 ## Before you start
 
-The input must be a readable `.md` file. Build Richie before use:
+The input must be a readable `.md`, `.html`, or `.htm` file. Build Richie before use:
 
 ```sh
 npm install
@@ -84,6 +84,28 @@ The unit points to the current Node 22 path in `packaging/richie.service`. Updat
 
 ## HTML artifacts
 
-Run `richie review --json report.html` exactly as for Markdown. Select rendered text or click an element, choose Comment, Replace, or Delete, then Finish. Richie never edits the HTML: Finish writes `report-commented.json` with source hash and structured targets. The artifact is sandboxed; local relative assets work, while forms, popups, downloads, top navigation, nested frames, shadow-DOM contents, and remote active content are not review targets.
+Run `richie review --json report.html` (or `.htm`) exactly as for Markdown. Richie captures an immutable snapshot and serves it only in an opaque-origin `sandbox="allow-scripts"` iframe. Self-contained scripts preserve local artifact navigation; same-directory regular CSS, JavaScript, image, and font assets are available through decoded lexical and realpath confinement. Forms, popups, downloads, top-level/nested frames, object/media/plugin content, workers, manifests, remote connections, cross-origin frames, privileged APIs, and shadow-DOM contents are blocked or outside the review target boundary.
 
-Revision log: 2026-09-14 — documented HTML review handoff.
+Select rendered text spanning inline elements or choose an element, then Comment, Replace, or Delete. Element evidence includes selector, exact tag, document-root path, bounded normalized text, and viewport/document geometry. Text evidence includes common ancestor, both boundary selectors/child-node paths/offsets, bounded normalized and raw text, and geometry. Mermaid source remains a selectable fallback; rendered nodes use diagram ID, node ID, label, selector, and geometry. Geometry is diagnostic evidence only. After refresh, a target resolves only when every identity anchor agrees. Ambiguous, missing, changed, delayed, rewritten, shadow-DOM, or cross-origin targets are shown in the card as **Unresolved target**, with selector/path evidence, and are never guessed or scrolled to.
+
+The artifact token never leaves the trusted shell. Its SDK messages carry only the session correlation and per-frame capability plus validated candidate evidence. If the canonical file changes, the shell keeps showing the original snapshot and displays a stale banner; operations and Finish return `409` and leave the sidecar intact. Confirmed Reload intentionally adopts the new bytes, clears open operations, and rotates the frame capability.
+
+Finish atomically writes `<source-basename>-commented.json` beside HTML only if open operations exist. It contains `schemaVersion`, `source`, `documentKind: "html"`, `sourceSha256`, `createdAt`, and open targets. Document notes are JSON operations, not HTML edits. Finish with no open operations and Abort remove only temporary state and produce no durable handoff. The canonical HTML bytes and hash remain unchanged.
+
+### Redacted HTML handoff examples
+
+```json
+{"schemaVersion":1,"source":"/work/report.html","documentKind":"html","sourceSha256":"<64 hex chars>","createdAt":"<ISO timestamp>","operations":[
+  {"id":"rvw_001","kind":"comment","status":"open","scope":"block","target":{"type":"html-element","selector":"#summary","path":[0,1,2],"tag":"p","text":"Summary text","rect":"<viewport/document/viewportSize>"}},
+  {"id":"rvw_002","kind":"replace","status":"open","scope":"range","target":{"type":"html-text-range","selector":"#body","commonAncestorSelector":"#body","start":{"selector":"#body","path":[0,0],"offset":3},"end":{"selector":"strong","path":[0],"offset":8},"text":"selected words","exactText":"selected words","rect":"<viewport/document/viewportSize>"}},
+  {"id":"rvw_003","kind":"delete","status":"open","scope":"block","target":{"type":"mermaid-node","diagramId":"diagram-1","nodeId":"node-a","label":"Start","selector":"#node-a","rect":"<viewport/document/viewportSize>"}}
+]}
+```
+
+The Unilever acceptance fixture is external and must not be copied into this repository. Run `npm run browser:test` for maintained Playwright coverage. Record command exit status, browser/version, console and failed-network observations, screenshots for visual checks, the fixture byte count and SHA-256 before/after, and the parsed JSON handoff.
+
+### Residual limitations
+
+Shadow-DOM content and cross-origin iframe contents are not traversed or targetable. A source rewrite or script-generated DOM change that fails stored evidence remains unresolved; Reload discards pending operations by explicit confirmation. Forms, popups, downloads, navigation, nested frames, remote active content, and privileged API/filesystem access remain intentionally blocked.
+
+Revision log: 2026-09-14 — documented immutable snapshots, strict target evidence and unresolved accessibility state, confined assets/CSP, Mermaid source/node behavior, HTML Finish/Abort, Playwright evidence, and residual limitations.

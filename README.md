@@ -1,6 +1,6 @@
 # Richie
 
-Richie is a local visual review layer for versioned Markdown. It keeps Markdown canonical, captures browser feedback in temporary JSON, and exports a committed `-commented.md` review copy using `<<ASB: ...>>` markers.
+Richie is a local visual review layer for versioned Markdown and local HTML artifacts. Markdown and HTML are always canonical source files: review state is temporary JSON, and only Markdown exports a `-commented.md` copy using `<<ASB: ...>>` markers.
 
 See the [user guide](user-guide.md) for installation, review, and handoff instructions.
 
@@ -20,6 +20,7 @@ npm test
 npm run build
 npm start
 npm run review -- path/to/draft-v03.md
+# or: npm run review -- report.html
 ```
 
 The service binds only to `127.0.0.1:43173`. The CLI asks its Unix control socket to create a review session and opens the resulting tab with `xdg-open`.
@@ -42,6 +43,12 @@ The service keeps WSL running while enabled. Review JSON files are ignored by Gi
 
 ## HTML review
 
-Richie also reviews local `.html` and `.htm` artifacts without modifying them. HTML is rendered in an opaque-origin `sandbox="allow-scripts"` iframe; only same-directory assets are served, and feedback is exported on Finish as `<name>-commented.json` beside the canonical HTML. The JSON contains SHA-256-bound element or text-range targets. Scripted artifacts continue to run, but forms, popups, navigation, downloads, cross-origin frames, and privileged API access are intentionally blocked.
+`richie review [--json] report.html` also reviews local `.html` and `.htm` artifacts without modifying them. The service captures one immutable source snapshot and renders it in an opaque-origin `sandbox="allow-scripts"` iframe. The iframe may execute self-contained scripts and load regular same-root CSS, JavaScript, image, and font assets, but the artifact policy blocks forms, popups, downloads, top-level or nested navigation, media/object/plugin content, workers, manifests, network connections, cross-origin frames, and privileged Richie APIs. Paths are decoded once, rejected on traversal, and confined by both lexical and resolved-realpath checks.
 
-Revision log: 2026-09-14 — added secure HTML review and JSON handoff.
+A target is structured evidence, not an HTML source offset. Element targets include a unique selector, exact tag, document path, bounded text, and geometry. Text-range targets include the common ancestor, both boundary selectors/child-node paths/offsets, bounded raw and normalized text, and geometry. Mermaid node targets include diagram ID, node ID, label, and selector. On refresh the artifact resolves every identity anchor; ambiguity, mismatch, delayed resolution timeout, shadow DOM, or a source/DOM rewrite is shown as **Unresolved target** and is never guessed or highlighted.
+
+Finish writes exactly one atomic `<name>-commented.json` handoff beside the HTML only when open operations exist. It contains `schemaVersion`, canonical source path, `documentKind: "html"`, source SHA-256, creation metadata, and open structured operations. A document note is stored in that JSON; it is not inserted into HTML. No-open Finish and Abort remove the temporary `.review.json` without creating a handoff. If disk bytes change, the shell keeps displaying the captured snapshot, shows a stale banner, and blocks operations and Finish with `409`; confirmed Reload adopts the new snapshot, clears operations, and rotates the artifact capability.
+
+The artifact URL, SDK, and postMessage payloads contain only the generated correlation/frame capability; the review token stays in the trusted shell/API boundary. `npm run browser:test` runs the maintained Playwright smoke suite against repository fixtures and the supplied external Unilever deck without copying or mutating it. Known limitations are shadow-DOM content and cross-origin iframe contents; source rewrites intentionally require re-review, while blocked active capabilities remain blocked.
+
+Revision log: 2026-09-14 — added immutable HTML snapshot, strict target evidence, confined assets, Mermaid fallback/node support, unresolved accessibility state, browser validation, and JSON handoff details.

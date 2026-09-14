@@ -1,10 +1,11 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { chmod, mkdir, readFile, rm, realpath, unlink, writeFile, stat, rename } from "node:fs/promises";
-import { basename, dirname, join, resolve, relative, extname } from "node:path";
+import { chmod, mkdir, readFile, rm, realpath, writeFile, rename, open } from "node:fs/promises";
+import { basename, dirname, join, resolve, relative, extname, isAbsolute, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadLocalImage, MediaError } from "./media.js";
-import { assertReviewFile, documentKindForPath, hasOpenOperations, newState, nextCommentedPath, readState, renderCommentedMarkdown, sha256, writeState } from "./store.js";
+import { documentKindForPath, hasOpenOperations, newState, nextCommentedPath, readSourceSnapshot, readState, renderCommentedMarkdown, sha256, writeState } from "./store.js";
+import { parseHtmlTarget } from "./html-target.js";
 import { ensureReviewDirectory, htmlCommentedPath, reviewSidecarPath } from "./paths.js";
 import { renderReviewHtml } from "./render.js";
 import type { HtmlTarget, ReviewOperation, ReviewOutcome, ReviewState, Session } from "./types.js";
@@ -122,6 +123,8 @@ code{font:0.92em ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",mo
 .operation-card{margin:8px 0;padding:9px;background:var(--overlay);border-radius:7px;font-size:.84rem;overflow-wrap:anywhere;border-left:3px solid var(--foam);scroll-margin:12px}.operation-card:focus{outline:2px solid var(--foam);outline-offset:2px}.operation-card.feedback-focus{animation:feedback-focus .9s ease}@keyframes feedback-focus{0%,100%{box-shadow:0 0 0 0 rgba(86,148,159,0)}35%{box-shadow:0 0 0 5px rgba(86,148,159,.4)}}
 .operation-card[data-kind=delete]{border-left-color:var(--love)}
 .operation-card[data-kind=replace]{border-left-color:var(--gold)}
+.html-resolution-status{display:block;margin-top:6px;padding:4px 6px;border-left:3px solid var(--love);background:rgba(180,99,122,.12);color:var(--love);font-weight:700}
+.operation-location-evidence{display:block;color:var(--subtle);font-size:.78rem;overflow-wrap:anywhere}
 .operation-meta{display:flex;justify-content:space-between;gap:8px;color:var(--subtle);font-size:.76rem;text-transform:capitalize}
 .operation-quote{display:block;margin:5px 0;color:var(--text);font-style:italic}
 .operation-detail{margin:0;color:var(--text)}
@@ -175,7 +178,7 @@ function renderFileBreadcrumb(sourcePath: string): string {
 }
 
 function send(response: ServerResponse, code: number, value: unknown, contentType = "application/json"): void {
-  response.writeHead(code, { "content-type": contentType, "cache-control": "no-store" });
+  response.writeHead(code, { "content-type": contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
   response.end(contentType === "application/json" ? JSON.stringify(value) : String(value));
 }
 function sendMedia(response: ServerResponse, body: Buffer, contentType: string, filename: string): void {
@@ -189,23 +192,88 @@ function sendMedia(response: ServerResponse, body: Buffer, contentType: string, 
   response.end(body);
 }
 async function body(request: IncomingMessage): Promise<unknown> {
-  let output = ""; for await (const chunk of request) output += chunk; return output ? JSON.parse(output) : {};
+  let output = "";
+  for await (const chunk of request) output += chunk;
+  if (!output) return {};
+  try { return JSON.parse(output) as unknown; } catch { return null; }
 }
-export function injectSdk(html: string, url: string): string { const tag = `<script src="${url}"></script>`; const index = html.search(/<\/body\s*>/i); return index < 0 ? `${html}${tag}` : `${html.slice(0, index)}${tag}${html.slice(index)}`; }
-function mime(path: string): string { return ({ ".css": "text/css", ".js": "text/javascript", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp", ".woff2": "font/woff2" } as Record<string,string>)[extname(path).toLowerCase()] ?? "application/octet-stream"; }
-function validTarget(value: unknown): value is HtmlTarget { const v = value as Record<string, unknown>; const text = (x: unknown, max = 2048) => typeof x === "string" && x.length <= max; const path = (x: unknown) => Array.isArray(x) && x.length <= 64 && x.every(n => Number.isInteger(n) && n >= 0 && n < 100000); const rect = (x: unknown) => { const r=x as Record<string, Record<string,unknown>>; return [r?.viewport,r?.document].every(p=>p && ["x","y","width","height"].every(k=>typeof p[k] === "number" && Number.isFinite(p[k]) && Math.abs(p[k] as number)<10000000)) && r?.viewportSize && ["width","height"].every(k=>typeof r.viewportSize[k] === "number" && r.viewportSize[k] as number > 0 && r.viewportSize[k] as number < 100000); }; if (!v || !text(v.selector, 1024) || !rect(v.rect)) return false; if (v.type === "html-element") return path(v.path) && text(v.tag,80) && text(v.text); if (v.type === "html-text-range") return text(v.commonAncestorSelector,1024) && text(v.text) && text(v.exactText) && [v.start,v.end].every(b => { const q=b as Record<string,unknown>; return text(q?.selector,1024) && path(q?.path) && Number.isInteger(q?.offset) && (q.offset as number)>=0 && (q.offset as number)<10000000; }); return v.type === "mermaid-node" && text(v.diagramId,256) && text(v.nodeId,256) && text(v.label); }
-function parseRange(value: unknown): ReviewOperation["range"] | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const candidate = value as { start?: { offset?: number; line?: number; column?: number }; end?: { offset?: number; line?: number; column?: number } };
-  if (typeof candidate.start?.offset !== "number" || typeof candidate.end?.offset !== "number") return undefined;
-  return { start: { offset: candidate.start.offset, line: candidate.start.line ?? 0, column: candidate.start.column ?? 0 }, end: { offset: candidate.end.offset, line: candidate.end.line ?? 0, column: candidate.end.column ?? 0 } };
+function bodyEndIndex(html: string): number {
+  // Tokenise raw-text elements and comments so a literal </body> in a script
+  // cannot become the injection point. The last real body close is the stable
+  // insertion point for otherwise-readable HTML.
+  const tokens = /<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>[\s\S]*?<\/style\s*>|<!--[\s\S]*?-->|<\/body\s*>/gi;
+  let match: RegExpExecArray | null; let close = -1;
+  while ((match = tokens.exec(html))) if (/^<\/body/i.test(match[0])) close = match.index;
+  return close;
+}
+export function injectSdk(html: string, url: string): string {
+  // url is generated by the service, but escaping it here keeps this pure helper
+  // safe if it is reused by another caller.
+  const safeUrl = url.replace(/&/g, "&amp;").replace(/\"/g, "&quot;").replace(/[<>]/g, "");
+  const tag = `<script src="${safeUrl}"></script>`;
+  const index = bodyEndIndex(html);
+  return index < 0 ? `${html}${tag}` : `${html.slice(0, index)}${tag}${html.slice(index)}`;
+}
+const assetMimes: Record<string, string> = {
+  ".css": "text/css", ".js": "text/javascript", ".png": "image/png", ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg", ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp",
+  ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".otf": "font/otf",
+};
+const mime = (path: string): string | undefined => assetMimes[extname(path).toLowerCase()];
+const artifactCsp = [
+  "default-src 'none'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:", "font-src 'self' data:", "connect-src 'none'", "object-src 'none'",
+  "media-src 'none'", "frame-src 'none'", "child-src 'none'", "worker-src 'none'", "manifest-src 'none'",
+  "form-action 'none'", "base-uri 'none'", "navigate-to 'none'",
+].join("; ");
+function parseRange(value: unknown): ReviewOperation["range"] | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as { start?: Record<string, unknown>; end?: Record<string, unknown> };
+  const validPosition = (position: unknown): position is { offset: number; line?: number; column?: number } => {
+    if (!position || typeof position !== "object" || Array.isArray(position)) return false;
+    const value = position as Record<string, unknown>;
+    return Number.isInteger(value.offset) && Number(value.offset) >= 0
+      && (value.line === undefined || Number.isInteger(value.line) && Number(value.line) >= 0)
+      && (value.column === undefined || Number.isInteger(value.column) && Number(value.column) >= 0);
+  };
+  const normalized = (position: { offset: number; line?: number; column?: number }): NonNullable<ReviewOperation["range"]>["start"] => ({ offset: position.offset, line: position.line ?? 0, column: position.column ?? 0 });
+  if (!validPosition(candidate.start) || !validPosition(candidate.end)) return null;
+  return { start: normalized(candidate.start), end: normalized(candidate.end) };
+}
+function artifactRelativePath(value: string): string | undefined {
+  let decoded: string;
+  try { decoded = decodeURIComponent(value); } catch { return undefined; }
+  if (!decoded || decoded.includes("\0") || decoded.includes("\\") || isAbsolute(decoded) || /^[A-Za-z]:[\\/]/.test(decoded)) return undefined;
+  const segments = decoded.split("/");
+  if (segments.some((segment) => segment === ".." || segment === "" && segments.length > 1)) return undefined;
+  return decoded;
+}
+async function readConfinedAsset(root: string, relativePath: string): Promise<{ body: Buffer; contentType: string } | undefined> {
+  const path = artifactRelativePath(relativePath);
+  if (!path) return undefined;
+  const lexical = resolve(root, path);
+  const lexicalRelative = relative(root, lexical);
+  if (lexicalRelative === "" || lexicalRelative.startsWith(`..${sep}`) || isAbsolute(lexicalRelative)) return undefined;
+  try {
+    const resolved = await realpath(lexical);
+    const resolvedRelative = relative(root, resolved);
+    if (resolvedRelative === "" || resolvedRelative.startsWith(`..${sep}`) || isAbsolute(resolvedRelative)) return undefined;
+    const contentType = mime(resolved);
+    if (!contentType) return undefined;
+    const handle = await open(resolved, "r");
+    try {
+      const details = await handle.stat();
+      if (!details.isFile()) return undefined;
+      return { body: await handle.readFile(), contentType };
+    } finally { await handle.close(); }
+  } catch { return undefined; }
 }
 
 export function renderReviewPage(session: Pick<Session, "id" | "token" | "sourcePath"> & Partial<Pick<Session, "documentKind" | "artifactNonce">>, source: string, stale = false): string {
   const isHtml = session.documentKind === "html";
   const banner = stale ? `<div id="stale-banner"><span>The ${isHtml ? "HTML " : "Markdown "}source changed after this review started. Highlights may be misaligned and new feedback is blocked. Restore the source or abort the review.</span><button type="button" data-action="reload-source">Reload new draft</button></div>` : "";
   const localImageUrl = (path: string): string => `/api/media/${encodeURIComponent(session.id)}?token=${encodeURIComponent(session.token)}&path=${encodeURIComponent(path)}`;
-  return `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Richie: ${session.sourcePath}</title><style>${style}</style>${banner}<aside id="panel"><div id="toolbar"><button id="navigation-toggle" type="button" aria-controls="navigation" aria-expanded="true">Hide navigation</button><button data-action="document-note">Document level note</button><button data-action="abort">Abort review</button><button data-action="finish">Finish review</button></div><div class="panel-heading"><strong>Review feedback</strong><span id="feedback-count" aria-live="polite">0 open</span></div><div id="operations"></div></aside><aside id="navigation"><a id="guide-link" href="/guide" target="_blank" rel="noreferrer">User guide</a><div class="search-box" role="search"><label for="document-search"><span>Find in document</span></label><input id="document-search" type="search" placeholder="Search…" autocomplete="off"><output id="search-count" aria-live="polite"></output><button data-action="search-previous" aria-label="Previous search match">Previous match</button><button data-action="search-next" aria-label="Next search match">Next match</button></div><nav id="outline" aria-label="Document outline"><strong>Document outline</strong><div id="outline-items"></div></nav></aside><main id="document">${renderFileBreadcrumb(session.sourcePath)}${isHtml ? `<iframe id="html-artifact" title="Reviewed HTML artifact" sandbox="allow-scripts" src="/artifact/${session.id}/index.html?n=${encodeURIComponent(session.artifactNonce ?? session.id)}" referrerpolicy="no-referrer"></iframe>` : renderReviewHtml(source, { localImageUrl })}</main><dialog id="richie-dialog"><form method="dialog"><h2 id="richie-dialog-title" title="Drag to move this dialog"></h2><p id="richie-dialog-message"></p><label id="richie-dialog-field"><span></span><textarea id="richie-dialog-input"></textarea></label><menu><button value="confirm">Confirm</button><button value="cancel">Cancel</button></menu></form></dialog><script>window.__RICHIE__=${JSON.stringify({ id: session.id, token: session.token, documentKind: session.documentKind ?? "markdown", artifactNonce: session.artifactNonce ?? session.id })}</script><script type="module" src="/assets/client.js"></script>`;
+  return `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Richie: ${escapeHtml(session.sourcePath)}</title><style>${style}</style>${banner}<aside id="panel"><div id="toolbar"><button id="navigation-toggle" type="button" aria-controls="navigation" aria-expanded="true">Hide navigation</button><button data-action="document-note">Document level note</button><button data-action="abort">Abort review</button><button data-action="finish">Finish review</button></div><div class="panel-heading"><strong>Review feedback</strong><span id="feedback-count" aria-live="polite">0 open</span></div><div id="operations"></div></aside><aside id="navigation"><a id="guide-link" href="/guide" target="_blank" rel="noreferrer">User guide</a><div class="search-box" role="search"><label for="document-search"><span>Find in document</span></label><input id="document-search" type="search" placeholder="Search…" autocomplete="off"><output id="search-count" aria-live="polite"></output><button data-action="search-previous" aria-label="Previous search match">Previous match</button><button data-action="search-next" aria-label="Next search match">Next match</button></div><nav id="outline" aria-label="Document outline"><strong>Document outline</strong><div id="outline-items"></div></nav></aside><main id="document">${renderFileBreadcrumb(session.sourcePath)}${isHtml ? `<iframe id="html-artifact" title="Reviewed HTML artifact" sandbox="allow-scripts" src="/artifact/${session.id}/index.html?n=${encodeURIComponent(session.artifactNonce ?? session.id)}" referrerpolicy="no-referrer"></iframe>` : renderReviewHtml(source, { localImageUrl })}</main><dialog id="richie-dialog"><form method="dialog"><h2 id="richie-dialog-title" title="Drag to move this dialog"></h2><p id="richie-dialog-message"></p><label id="richie-dialog-field"><span></span><textarea id="richie-dialog-input"></textarea></label><menu><button value="confirm">Confirm</button><button value="cancel">Cancel</button></menu></form></dialog><script>window.__RICHIE__=${JSON.stringify({ id: session.id, token: session.token, documentKind: session.documentKind ?? "markdown", artifactNonce: session.artifactNonce ?? session.id })}</script><script type="module" src="/assets/client.js"></script>`;
 }
 
 export class RichieService {
@@ -255,15 +323,13 @@ export class RichieService {
     const sourcePath = await realpath(inputPath);
     const existing = this.byPath.get(sourcePath);
     if (existing) { const session = this.sessions.get(existing)!; return { id: session.id, url: this.url(session) }; }
-    const source = await assertReviewFile(sourcePath);
+    const snapshot = await readSourceSnapshot(sourcePath);
     const documentKind = documentKindForPath(sourcePath);
-    const sourceHash = sha256(source);
     await ensureReviewDirectory();
-    const sidecarPath = reviewSidecarPath(sourcePath, sourceHash);
-    const state = (await readState(sidecarPath)) ?? newState(sourcePath, source);
-    if (state.sourceSha256 !== sourceHash) throw new Error("The existing review sidecar targets a different source version. Finish or remove it before starting a new review.");
-    state.documentKind ??= documentKind;
-    const session: Session = { id: randomUUID(), token: randomUUID(), sourcePath, source, documentKind, artifactNonce: randomUUID(), sidecarPath, state };
+    const sidecarPath = reviewSidecarPath(sourcePath, snapshot.sourceSha256);
+    const state = (await readState(sidecarPath, sourcePath)) ?? newState(sourcePath, snapshot.source);
+    if (state.sourceSha256 !== snapshot.sourceSha256 || state.documentKind !== documentKind) throw new Error("The existing review sidecar targets a different source version or document kind. Finish or remove it before starting a new review.");
+    const session: Session = { id: randomUUID(), token: randomUUID(), sourcePath, source: snapshot.source, documentKind, artifactNonce: randomUUID(), sidecarPath, state };
     this.sessions.set(session.id, session); this.byPath.set(sourcePath, session.id);
     await writeState(sidecarPath, state);
     return { id: session.id, url: this.url(session) };
@@ -278,16 +344,38 @@ export class RichieService {
     const artifact = url.pathname.match(/^\/artifact\/([^/]+)\/(.*)$/);
     const api = url.pathname.match(/^\/api\/(state|operations|reload|finish|abort)\/([^/]+)(?:\/([^/]+))?$/);
     if (url.pathname.startsWith("/assets/")) {
+      if (request.method !== "GET") return send(response, 405, { error: "Method not allowed" });
       const asset = url.pathname.slice("/assets/".length);
-      if (!/^[A-Za-z0-9._-]+\.js(?:\?[^/]*)?$/.test(asset)) return send(response, 404, { error: "Asset not found" });
-      return send(response, 200, await readFile(join(publicDirectory, asset), "utf8"), "text/javascript");
+      if (!/^[A-Za-z0-9._-]+\.js$/.test(asset)) return send(response, 404, { error: "Asset not found" });
+      if (asset === "html-review-sdk.js") {
+        const capability = url.searchParams.get("c");
+        if (!capability || ![...this.sessions.values()].some((candidate) => candidate.documentKind === "html" && !candidate.outcome && candidate.artifactNonce === capability)) return send(response, 404, { error: "Asset not found" });
+      }
+      try {
+        const bytes = await readFile(join(publicDirectory, asset));
+        response.writeHead(200, { "content-type": "text/javascript", "content-length": bytes.length, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+        response.end(bytes);
+      } catch { return send(response, 404, { error: "Asset not found" }); }
+      return;
     }
-    if (artifact && request.method === "GET") {
-      const session = this.sessions.get(artifact[1]); if (!session || session.documentKind !== "html") return send(response, 404, { error: "Artifact not found" });
-      if (artifact[2] === "index.html") { const nonce = url.searchParams.get("n"); if (nonce !== session.artifactNonce) return send(response, 404, { error: "Artifact not found" }); const sdk = `/assets/html-review-sdk.js?c=${encodeURIComponent(session.artifactNonce)}`; const output = injectSdk(await readFile(session.sourcePath, "utf8"), sdk); response.writeHead(200, { "content-type":"text/html", "cache-control":"no-store", "content-security-policy":"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'", "x-content-type-options":"nosniff" }); response.end(output); return; }
-      const relativePath = artifact[2]; if (!relativePath || relativePath.includes("\\") || relativePath.split("/").includes("..")) return send(response, 404, { error:"Asset not found" });
-      const root = dirname(session.sourcePath); const lexical = resolve(root, relativePath); if (relative(root, lexical).startsWith("..")) return send(response, 404,{error:"Asset not found"});
-      try { const resolved = await realpath(lexical); if (relative(root, resolved).startsWith("..") || (await stat(resolved)).isDirectory()) return send(response,404,{error:"Asset not found"}); const bytes=await readFile(resolved); response.writeHead(200,{"content-type":mime(resolved),"content-length":bytes.length,"cache-control":"no-store","x-content-type-options":"nosniff"}); response.end(bytes); return; } catch { return send(response,404,{error:"Asset not found"}); }
+    if (artifact) {
+      if (request.method !== "GET") return send(response, 405, { error: "Method not allowed" });
+      const session = this.sessions.get(artifact[1]);
+      if (!session || session.documentKind !== "html" || session.outcome) return send(response, 404, { error: "Artifact not found" });
+      if (artifact[2] === "index.html") {
+        const nonce = url.searchParams.get("n");
+        if (nonce !== session.artifactNonce) return send(response, 404, { error: "Artifact not found" });
+        const sdk = `/assets/html-review-sdk.js?c=${encodeURIComponent(session.artifactNonce)}`;
+        const output = injectSdk(session.source, sdk);
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": artifactCsp, "x-content-type-options": "nosniff" });
+        response.end(output);
+        return;
+      }
+      const asset = await readConfinedAsset(dirname(session.sourcePath), artifact[2]);
+      if (!asset) return send(response, 404, { error: "Asset not found" });
+      response.writeHead(200, { "content-type": asset.contentType, "content-length": asset.body.length, "cache-control": "no-store", "content-security-policy": artifactCsp, "x-content-type-options": "nosniff" });
+      response.end(asset.body);
+      return;
     }
     if (url.pathname === "/guide" && request.method === "GET") {
       const guide = await readFile(resolve(here, "..", "..", "user-guide.md"), "utf8");
@@ -314,17 +402,18 @@ export class RichieService {
     const session = this.session(api[2], url.searchParams.get("token")); if (!session) return send(response, 404, { error: "Session not found" });
     if (api[1] === "state" && request.method === "GET") return send(response, 200, session.state);
     if (api[1] === "reload" && request.method === "POST") {
-      const source = await readFile(session.sourcePath, "utf8");
-      const sidecarPath = reviewSidecarPath(session.sourcePath, sha256(source));
-      if (sidecarPath !== session.sidecarPath) await unlink(session.sidecarPath);
-      session.source = source;
+      const snapshot = await readSourceSnapshot(session.sourcePath);
+      const sidecarPath = reviewSidecarPath(session.sourcePath, snapshot.sourceSha256);
+      if (sidecarPath !== session.sidecarPath) await rm(session.sidecarPath, { force: true });
+      session.source = snapshot.source;
       session.artifactNonce = randomUUID();
-      session.state = newState(session.sourcePath, source);
+      session.state = newState(session.sourcePath, snapshot.source);
       session.sidecarPath = sidecarPath;
       await writeState(sidecarPath, session.state);
-      return send(response, 200, { reloaded: true });
+      return send(response, 200, { reloaded: true, sourceSha256: snapshot.sourceSha256 });
     }
     if (api[1] === "operations" && request.method === "DELETE" && api[3]) {
+      if ((await readSourceSnapshot(session.sourcePath)).sourceSha256 !== session.state.sourceSha256) return send(response, 409, { error: `The ${session.documentKind === "html" ? "HTML" : "Markdown"} source changed during the review. Restore the source or abort the review.` });
       const operation = session.state.operations.find((candidate) => candidate.id === api[3]);
       if (!operation) return send(response, 404, { error: "Review operation not found" });
       if (operation.status !== "open") return send(response, 409, { error: "Only open feedback can be removed" });
@@ -332,50 +421,84 @@ export class RichieService {
       await writeState(session.sidecarPath, session.state); return send(response, 200, operation);
     }
     if (api[1] === "operations" && request.method === "PATCH" && api[3]) {
+      if ((await readSourceSnapshot(session.sourcePath)).sourceSha256 !== session.state.sourceSha256) return send(response, 409, { error: `The ${session.documentKind === "html" ? "HTML" : "Markdown"} source changed during the review. Restore the source or abort the review.` });
       const operation = session.state.operations.find((candidate) => candidate.id === api[3]);
       if (!operation) return send(response, 404, { error: "Review operation not found" });
       if (operation.status !== "open") return send(response, 409, { error: "Only open feedback can be edited" });
-      const input = await body(request) as Record<string, unknown>;
-      if (operation.kind === "comment" && typeof input.comment === "string" && input.comment.trim()) operation.comment = input.comment;
-      else if (operation.kind === "replace" && typeof input.replacement === "string" && input.replacement.trim()) operation.replacement = input.replacement;
+      const raw = await body(request);
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return send(response, 400, { error: "Invalid operation payload" });
+      const input = raw as Record<string, unknown>;
+      if (operation.kind === "comment" && typeof input.comment === "string" && input.comment.trim() && input.comment.length <= 16_384 && input.replacement === undefined) operation.comment = input.comment;
+      else if (operation.kind === "replace" && typeof input.replacement === "string" && input.replacement.trim() && input.replacement.length <= 16_384 && input.comment === undefined) operation.replacement = input.replacement;
       else return send(response, 400, { error: "Nothing to update for this operation" });
       operation.updatedAt = new Date().toISOString();
       await writeState(session.sidecarPath, session.state); return send(response, 200, operation);
     }
     if (api[1] === "operations" && request.method === "POST") {
-      const input = await body(request) as Record<string, unknown>; const range = parseRange(input.range); const target = input.target;
-      const source = await readFile(session.sourcePath, "utf8");
-      if (sha256(source) !== session.state.sourceSha256) return send(response, 409, { error: "The Markdown source changed during the review. Restore the source or abort the review." });
-      if (range && (range.start.offset < 0 || range.end.offset > source.length || range.start.offset >= range.end.offset)) return send(response, 400, { error: "Invalid source range" });
-      const kind = input.kind; if (kind !== "delete" && kind !== "replace" && kind !== "comment") return send(response, 400, { error: "Invalid operation kind" });
-      const requestedScope = typeof input.scope === "string" ? input.scope : "range";
-      const isHtmlDocumentNote = session.documentKind === "html" && requestedScope === "document" && kind === "comment" && target === undefined && range === undefined;
-      if (session.documentKind === "html" && !isHtmlDocumentNote && (!validTarget(target) || range)) return send(response, 400, { error: "A valid HTML target is required" });
-      if (session.documentKind === "markdown" && target !== undefined) return send(response, 400, { error: "HTML targets are not valid for Markdown" });
+      const raw = await body(request);
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return send(response, 400, { error: "Invalid operation payload" });
+      const input = raw as Record<string, unknown>;
+      const parsedRange = input.range === undefined ? undefined : parseRange(input.range);
+      const range = parsedRange ?? undefined;
+      const target = input.target === undefined ? undefined : parseHtmlTarget(input.target);
+      const source = (await readSourceSnapshot(session.sourcePath));
+      if (source.sourceSha256 !== session.state.sourceSha256) return send(response, 409, { error: `The ${session.documentKind === "html" ? "HTML" : "Markdown"} source changed during the review. Restore the source or abort the review.` });
+      if (input.range !== undefined && !range) return send(response, 400, { error: "Invalid source range" });
+      if (range && (range.start.offset >= range.end.offset || range.end.offset > source.source.length)) return send(response, 400, { error: "Invalid source range" });
+      const kind = input.kind;
+      if (kind !== "delete" && kind !== "replace" && kind !== "comment") return send(response, 400, { error: "Invalid operation kind" });
+      const requestedScope = typeof input.scope === "string" ? input.scope : session.documentKind === "html" ? "range" : "range";
+      const isHtmlDocumentNote = session.documentKind === "html" && requestedScope === "document" && kind === "comment" && input.target === undefined && input.range === undefined;
+      if (session.documentKind === "html") {
+        if (isHtmlDocumentNote) {
+          if (input.replacement !== undefined || input.target !== undefined || input.range !== undefined) return send(response, 400, { error: "Invalid HTML document note" });
+        } else {
+          if (input.target === undefined || !target || range) return send(response, 400, { error: "A valid HTML target is required" });
+          const expectedScope = target.type === "html-text-range" ? "range" : "block";
+          if (requestedScope !== expectedScope) return send(response, 400, { error: "HTML target scope does not match its type" });
+        }
+      } else {
+        if (input.target !== undefined) return send(response, 400, { error: "HTML targets are not valid for Markdown" });
+      }
       const scopes: ReviewOperation["scope"][] = session.documentKind === "html" ? ["range", "block", "document"] : ["range", "block", "section", "document", "cell", "row", "column", "media"];
       const scope = scopes.includes(requestedScope as ReviewOperation["scope"]) ? requestedScope as ReviewOperation["scope"] : undefined;
       if (!scope) return send(response, 400, { error: "Invalid operation scope" });
-      const operation: ReviewOperation = { id: `rvw_${String(session.state.operations.length + 1).padStart(3, "0")}`, kind, status: "open", scope, range, target: target as HtmlTarget | undefined, quote: range ? source.slice(range.start.offset, range.end.offset) : target && validTarget(target) ? (target.type === "mermaid-node" ? target.label : target.text) : undefined, replacement: typeof input.replacement === "string" ? input.replacement : undefined, comment: typeof input.comment === "string" ? input.comment : undefined, placement: input.placement === "start" || input.placement === "end" ? input.placement : undefined, createdAt: new Date().toISOString() };
+      if (kind === "comment" && (typeof input.comment !== "string" || !input.comment.trim() || input.comment.length > 16_384)) return send(response, 400, { error: "A comment is required" });
+      if (kind === "replace" && (typeof input.replacement !== "string" || !input.replacement.trim() || input.replacement.length > 16_384)) return send(response, 400, { error: "A replacement is required" });
+      if (kind === "delete" && (input.comment !== undefined || input.replacement !== undefined)) return send(response, 400, { error: "Delete operations cannot include comment or replacement text" });
+      if (kind === "comment" && input.replacement !== undefined || kind === "replace" && input.comment !== undefined) return send(response, 400, { error: "Operation payload does not match its kind" });
+      if (session.documentKind === "html" && !isHtmlDocumentNote && !target) return send(response, 400, { error: "A valid HTML target is required" });
+      const operation: ReviewOperation = {
+        id: `rvw_${String(session.state.operations.length + 1).padStart(3, "0")}`,
+        kind, status: "open", scope, range, target, quote: range ? source.source.slice(range.start.offset, range.end.offset) : target ? (target.type === "mermaid-node" ? target.label : target.type === "html-text-range" ? target.exactText : target.text) : undefined,
+        replacement: typeof input.replacement === "string" ? input.replacement : undefined,
+        comment: typeof input.comment === "string" ? input.comment : undefined,
+        placement: input.placement === "start" || input.placement === "end" ? input.placement : undefined,
+        createdAt: new Date().toISOString(),
+      };
       session.state.operations.push(operation); await writeState(session.sidecarPath, session.state); return send(response, 201, operation);
     }
     if (api[1] === "finish" && request.method === "POST") {
       if (session.outcome) return send(response, 200, session.outcome);
-      const source = await readFile(session.sourcePath, "utf8"); if (sha256(source) !== session.state.sourceSha256) return send(response, 409, { error: "Source changed during review; feedback was retained." });
+      const snapshot = await readSourceSnapshot(session.sourcePath); if (snapshot.sourceSha256 !== session.state.sourceSha256) return send(response, 409, { error: `${session.documentKind === "html" ? "HTML" : "Source"} changed during review; feedback was retained.` });
       const outcome = await this.transition(session, async () => {
         if (!hasOpenOperations(session.state)) {
-          await unlink(session.sidecarPath);
+          await rm(session.sidecarPath, { force: true });
           return { status: "finished", file: session.sourcePath };
         }
         const outputPath = session.documentKind === "html" ? htmlCommentedPath(session.sourcePath) : await nextCommentedPath(session.sourcePath);
-        if (session.documentKind === "html") { const temporary = `${outputPath}.${randomUUID()}.tmp`; await writeFile(temporary, `${JSON.stringify({ source: session.sourcePath, documentKind: "html", sourceSha256: session.state.sourceSha256, createdAt: session.state.createdAt, operations: session.state.operations.filter(operation => operation.status === "open") }, null, 2)}\n`, { mode: 0o600 }); await rename(temporary, outputPath); }
-        else await writeFile(outputPath, renderCommentedMarkdown(source, session.state), "utf8");
-        await unlink(session.sidecarPath);
+        if (session.documentKind === "html") {
+          const temporary = `${outputPath}.${randomUUID()}.tmp`;
+          await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, source: session.sourcePath, documentKind: "html", sourceSha256: session.state.sourceSha256, createdAt: session.state.createdAt, operations: session.state.operations.filter(operation => operation.status === "open") }, null, 2)}\n`, { mode: 0o600 });
+          await rename(temporary, outputPath);
+        } else await writeFile(outputPath, renderCommentedMarkdown(snapshot.source, session.state), "utf8");
+        await rm(session.sidecarPath, { force: true });
         return { status: "finished", file: outputPath };
       });
       return send(response, 200, outcome);
     }
     if (api[1] === "abort" && request.method === "POST") {
-      const outcome = await this.transition(session, async () => { await unlink(session.sidecarPath); return { status: "aborted" }; });
+      const outcome = await this.transition(session, async () => { await rm(session.sidecarPath, { force: true }); return { status: "aborted" }; });
       return send(response, 200, outcome);
     }
     return send(response, 405, { error: "Method not allowed" });

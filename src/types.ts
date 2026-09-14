@@ -37,7 +37,8 @@ export type ReviewOutcome =
 export type ReviewState = {
   schemaVersion: 1;
   source: string;
-  documentKind?: DocumentKind;
+  /** Always present in normalized in-memory state; legacy JSON may omit it at parse time. */
+  documentKind: DocumentKind;
   sourceSha256: string;
   createdAt: string;
   operations: ReviewOperation[];

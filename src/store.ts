@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { access, readFile, rename, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
+import { parseHtmlTarget } from "./html-target.js";
 import { constants } from "node:fs";
 import { commentedPath, reviewSidecarPath } from "./paths.js";
 import { parseMarkdown } from "./render.js";
@@ -25,6 +26,11 @@ export async function assertReviewFile(sourcePath: string): Promise<string> {
 }
 export const assertMarkdownFile = assertReviewFile;
 
+export async function readSourceSnapshot(sourcePath: string): Promise<{ source: string; sourceSha256: string }> {
+  const source = await assertReviewFile(sourcePath);
+  return { source, sourceSha256: sha256(source) };
+}
+
 export function newState(sourcePath: string, source: string): ReviewState {
   return { schemaVersion: 1, source: sourcePath, documentKind: documentKindForPath(sourcePath), sourceSha256: sha256(source), createdAt: new Date().toISOString(), operations: [] };
 }
@@ -33,8 +39,80 @@ export function hasOpenOperations(state: ReviewState): boolean {
   return state.operations.some((operation) => operation.status === "open");
 }
 
-export async function readState(sidecarPath: string): Promise<ReviewState | undefined> {
-  try { return JSON.parse(await readFile(sidecarPath, "utf8")) as ReviewState; }
+type UnknownRecord = Record<string, unknown>;
+const operationKinds = new Set<ReviewOperation["kind"]>(["comment", "replace", "delete"]);
+const operationStatuses = new Set<ReviewOperation["status"]>(["open", "applied", "rejected", "needs-review", "superseded"]);
+const operationScopes = new Set<ReviewOperation["scope"]>(["range", "block", "section", "document", "cell", "row", "column", "media"]);
+const isRecord = (value: unknown): value is UnknownRecord => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const boundedText = (value: unknown, max = 16_384): value is string => typeof value === "string" && value.length <= max;
+const position = (value: unknown): value is { line?: number; column?: number; offset: number } => isRecord(value)
+  && Number.isInteger(value.offset) && Number(value.offset) >= 0
+  && (value.line === undefined || Number.isInteger(value.line) && Number(value.line) >= 0)
+  && (value.column === undefined || Number.isInteger(value.column) && Number(value.column) >= 0);
+
+function normalizeOperation(value: unknown, documentKind: ReviewState["documentKind"]): ReviewOperation {
+  if (!isRecord(value) || !boundedText(value.id, 128) || !value.id || !operationKinds.has(value.kind as ReviewOperation["kind"])
+    || !operationStatuses.has(value.status as ReviewOperation["status"]) || !operationScopes.has(value.scope as ReviewOperation["scope"])
+    || !boundedText(value.createdAt, 128)) throw new Error("Invalid review operation in sidecar");
+  const operation: ReviewOperation = {
+    id: value.id as string,
+    kind: value.kind as ReviewOperation["kind"],
+    status: value.status as ReviewOperation["status"],
+    scope: value.scope as ReviewOperation["scope"],
+    createdAt: value.createdAt as string,
+  };
+  if (value.updatedAt !== undefined && !boundedText(value.updatedAt, 128)) throw new Error("Invalid review operation timestamp");
+  if (value.updatedAt !== undefined) operation.updatedAt = value.updatedAt as string;
+  if (value.range !== undefined) {
+    if (documentKind === "html" || !isRecord(value.range) || !position(value.range.start) || !position(value.range.end)
+      || (value.range.start as { offset: number }).offset >= (value.range.end as { offset: number }).offset) throw new Error("Invalid review operation range");
+    operation.range = { start: { offset: value.range.start.offset, line: value.range.start.line ?? 0, column: value.range.start.column ?? 0 }, end: { offset: value.range.end.offset, line: value.range.end.line ?? 0, column: value.range.end.column ?? 0 } };
+  }
+  if (value.target !== undefined) {
+    if (documentKind !== "html") throw new Error("HTML target in Markdown sidecar");
+    const target = parseHtmlTarget(value.target);
+    if (!target) throw new Error("Invalid HTML target in sidecar");
+    operation.target = target;
+  }
+  if (documentKind === "html") {
+    if (operation.scope === "document") {
+      if (operation.kind !== "comment" || operation.target !== undefined || operation.range !== undefined) throw new Error("Invalid HTML document operation");
+    } else if (!operation.target) throw new Error("HTML operation is missing its target");
+    else if ((operation.target.type === "html-text-range" && operation.scope !== "range") || (operation.target.type !== "html-text-range" && operation.scope !== "block")) throw new Error("HTML target scope mismatch");
+  }
+  for (const [key, max] of [["quote", 16_384], ["comment", 16_384], ["replacement", 16_384]] as const) {
+    if (value[key] !== undefined && !boundedText(value[key], max)) throw new Error(`Invalid ${key} in review operation`);
+    if (value[key] !== undefined) (operation as unknown as UnknownRecord)[key] = value[key];
+  }
+  if (value.headingPath !== undefined && (!Array.isArray(value.headingPath) || !value.headingPath.every((item) => boundedText(item, 1024)))) throw new Error("Invalid heading path in review operation");
+  if (value.headingPath !== undefined) operation.headingPath = [...value.headingPath as string[]];
+  if (value.blockId !== undefined && !boundedText(value.blockId, 1024)) throw new Error("Invalid block ID in review operation");
+  if (value.blockId !== undefined) operation.blockId = value.blockId as string;
+  if (value.placement !== undefined && value.placement !== "start" && value.placement !== "end") throw new Error("Invalid operation placement");
+  if (value.placement !== undefined) operation.placement = value.placement as "start" | "end";
+  if (operation.kind === "comment" && (typeof operation.comment !== "string" || !operation.comment.trim())) throw new Error("Comment operation is missing its comment");
+  if (operation.kind === "replace" && (typeof operation.replacement !== "string" || !operation.replacement.trim())) throw new Error("Replace operation is missing its replacement");
+  if (operation.kind === "delete" && (operation.comment !== undefined || operation.replacement !== undefined)) throw new Error("Delete operation contains unsupported payload");
+  return operation;
+}
+
+/** Normalize old sidecars at the persistence boundary, never by unchecked casting. */
+export function normalizeReviewState(value: unknown, expectedSourcePath?: string): ReviewState {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !boundedText(value.source, 4096) || !value.source
+    || !/^[a-f0-9]{64}$/.test(String(value.sourceSha256)) || !boundedText(value.createdAt, 128)
+    || !Array.isArray(value.operations)) throw new Error("Invalid review sidecar");
+  const source = value.source;
+  const documentKind = value.documentKind === undefined ? "markdown" : value.documentKind;
+  if (documentKind !== "markdown" && documentKind !== "html") throw new Error("Invalid document kind in review sidecar");
+  if (expectedSourcePath && source !== expectedSourcePath) throw new Error("Review sidecar targets a different source path");
+  const derived = documentKindForPath(expectedSourcePath ?? source);
+  if (derived !== documentKind) throw new Error("Review sidecar document kind does not match its source path");
+  const operations = value.operations.map((operation) => normalizeOperation(operation, documentKind));
+  return { schemaVersion: 1, source, documentKind, sourceSha256: value.sourceSha256 as string, createdAt: value.createdAt as string, operations };
+}
+
+export async function readState(sidecarPath: string, expectedSourcePath?: string): Promise<ReviewState | undefined> {
+  try { return normalizeReviewState(JSON.parse(await readFile(sidecarPath, "utf8")), expectedSourcePath); }
   catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

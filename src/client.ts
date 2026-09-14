@@ -1,5 +1,6 @@
 import mermaid from "mermaid";
 import { sourceText, type RenderedTextPart } from "./source-offset.js";
+import { parseHtmlTarget } from "./html-target.js";
 
 declare global { interface Window { __RICHIE__: { id: string; token: string; documentKind?: "markdown" | "html"; artifactNonce?: string } } }
 const context = window.__RICHIE__;
@@ -17,12 +18,15 @@ const endpoint = (name: string) => `/api/${name}/${context.id}?token=${encodeURI
 const operationEndpoint = (id: string) => `/api/operations/${context.id}/${encodeURIComponent(id)}?token=${encodeURIComponent(context.token)}`;
 type Position = { offset: number; line: number; column: number };
 type Range = { start: Position; end: Position };
-type HtmlTarget = { type: "html-element" | "html-text-range" | "mermaid-node"; selector: string; text: string; [key: string]: unknown };
+type HtmlTarget = { type: "html-element" | "html-text-range" | "mermaid-node"; selector: string; text?: string; exactText?: string; [key: string]: unknown };
 type Operation = { id: string; kind: "delete" | "replace" | "comment"; status: string; scope: string; range?: Range; target?: HtmlTarget; comment?: string; replacement?: string; quote?: string };
 type DialogOptions = { title: string; message?: string; inputLabel?: string; inputValue?: string; confirmLabel?: string; destructive?: boolean };
 let activeHtmlOperations: Operation[] = [];
 let annotationSyncTimer: number | undefined;
+let htmlFrameCapability: string | undefined;
+const htmlResolution = new Map<string, "pending" | "resolved" | "unresolved">();
 const pendingHtmlJumps = new Map<string, number>();
+const htmlSyncTimeout = 3_500;
 const dialog = document.querySelector<HTMLDialogElement>("#richie-dialog")!;
 const dialogTitle = dialog.querySelector<HTMLElement>("#richie-dialog-title")!;
 const dialogMessage = dialog.querySelector<HTMLElement>("#richie-dialog-message")!;
@@ -224,19 +228,34 @@ function operationSummary(operation: Operation): string {
   }
   return operation.comment ?? "Review this selection";
 }
+function htmlTargetEvidence(target: HtmlTarget): string {
+  if (target.type === "html-element") return `Element ${target.tag} · selector ${target.selector} · path [${target.path.join(", ")}]`;
+  if (target.type === "mermaid-node") return `Mermaid node ${target.nodeId} · diagram ${target.diagramId} · selector ${target.selector}`;
+  return `Text range · selector ${target.selector} · start ${target.start.selector} [${target.start.path.join(", ")}] @${target.start.offset} · end ${target.end.selector} [${target.end.path.join(", ")}] @${target.end.offset}`;
+}
 function renderFeedback(operations: Operation[]): void {
   const open = operations.filter((operation) => operation.status === "open");
+  const activeIds = new Set(open.map((operation) => operation.id));
+  [...htmlResolution.keys()].forEach((id) => { if (!activeIds.has(id)) htmlResolution.delete(id); });
+  open.forEach((operation) => { if (operation.target && !htmlResolution.has(operation.id)) htmlResolution.set(operation.id, "pending"); });
   const count = document.querySelector<HTMLElement>("#feedback-count")!; count.textContent = `${open.length} open`;
   const container = document.querySelector<HTMLElement>("#operations")!; container.replaceChildren();
   if (!open.length) { const empty = document.createElement("p"); empty.textContent = "No feedback yet. Select text or use a block control to add some."; container.append(empty); return; }
   open.forEach((operation) => {
-    const card = document.createElement("article"); card.className = "operation-card"; card.dataset.kind = operation.kind; card.id = `feedback-${operation.id}`; card.tabIndex = -1;
+    const card = document.createElement("article"); card.className = "operation-card"; card.dataset.kind = operation.kind; card.dataset.operationId = operation.id; card.id = `feedback-${operation.id}`; card.tabIndex = -1;
+    if (operation.target) card.dataset.targetSelector = operation.target.selector;
     const meta = document.createElement("div"); meta.className = "operation-meta"; meta.append(operation.id, document.createTextNode(`${operation.kind} · ${operation.scope}`)); card.append(meta);
-    if (operation.target) { const target = document.createElement("small"); target.textContent = `${operation.target.type}: ${excerpt(operation.target.text)}`; card.append(target); }
+    if (operation.target) {
+      const target = document.createElement("small"); target.className = "operation-target-evidence"; target.textContent = `${operation.target.type}: ${excerpt(operation.target.text ?? operation.target.label ?? operation.target.exactText ?? "")}`; card.append(target);
+      const evidenceLine = document.createElement("small"); evidenceLine.className = "operation-location-evidence"; evidenceLine.textContent = htmlTargetEvidence(operation.target); card.append(evidenceLine);
+      const status = htmlResolution.get(operation.id);
+      if (status === "unresolved") { const unresolved = document.createElement("strong"); unresolved.className = "html-resolution-status"; unresolved.setAttribute("role", "status"); unresolved.textContent = "Unresolved target — the document no longer matches the saved evidence."; card.append(unresolved); card.dataset.unresolved = "true"; }
+      else if (status === "pending") { const pending = document.createElement("span"); pending.className = "html-resolution-status"; pending.setAttribute("role", "status"); pending.textContent = "Target resolution pending…"; card.append(pending); }
+    }
     if (operation.quote) { const quote = document.createElement("q"); quote.className = "operation-quote"; quote.textContent = operation.quote; card.append(quote); }
     const detail = document.createElement("p"); detail.className = "operation-detail"; detail.textContent = operationSummary(operation); card.append(detail);
     const actions = document.createElement("div"); actions.className = "operation-actions";
-    if (operation.range || operation.target) { const jump = document.createElement("button"); jump.textContent = "Jump to target"; jump.addEventListener("click", () => { if (operation.target) jumpToHtmlTarget(operation.target); else operationTarget(operation)?.scrollIntoView({ behavior: "smooth", block: "center" }); }); actions.append(jump); }
+    if (operation.range || operation.target) { const jump = document.createElement("button"); jump.textContent = "Jump to target"; jump.addEventListener("click", () => { if (operation.target) jumpToHtmlTarget(operation.id, operation.target); else operationTarget(operation)?.scrollIntoView({ behavior: "smooth", block: "center" }); }); actions.append(jump); }
     if (operation.kind !== "delete") {
       const edit = document.createElement("button"); edit.textContent = "Edit";
       edit.addEventListener("click", async () => {
@@ -313,28 +332,36 @@ function moveSearch(step: number): void {
   searchMatches[searchIndex].startContainer.parentElement?.scrollIntoView({ behavior: "smooth", block: "center" });
   document.querySelector<HTMLOutputElement>("#search-count")!.textContent = `${searchIndex + 1}/${searchMatches.length}`;
 }
+function htmlFrame(): HTMLIFrameElement | undefined { return document.querySelector<HTMLIFrameElement>("#html-artifact") ?? undefined; }
 function syncHtmlAnnotations(operations = activeHtmlOperations): void {
-  if (context.documentKind !== "html") return;
-  document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow?.postMessage({
-    type: "richie-html-operations",
-    correlation: context.artifactNonce,
-    operations: operations.filter((operation) => operation.status === "open" && operation.target).map(({ id, kind, target }) => ({ id, kind, target })),
+  if (context.documentKind !== "html" || !htmlFrameCapability) return;
+  htmlFrame()?.contentWindow?.postMessage({
+    type: "richie-html-operations", correlation: context.artifactNonce, frameCapability: htmlFrameCapability,
+    operations: operations.filter((operation) => operation.status === "open" && operation.target).map(({ id, kind, target, replacement }) => ({ id, kind, target, replacement })),
   }, "*");
 }
-function scheduleHtmlAnnotationSync(): void {
-  if (context.documentKind !== "html") return;
-  window.clearInterval(annotationSyncTimer);
-  let attempts = 0;
-  syncHtmlAnnotations();
-  annotationSyncTimer = window.setInterval(() => { syncHtmlAnnotations(); if (++attempts === 20) window.clearInterval(annotationSyncTimer); }, 150);
+function markUnresolvedAfterTimeout(): void {
+  activeHtmlOperations.filter((operation) => operation.status === "open" && operation.target).forEach((operation) => {
+    if (htmlResolution.get(operation.id) === "pending") htmlResolution.set(operation.id, "unresolved");
+  });
+  renderFeedback(activeHtmlOperations);
 }
-function jumpToHtmlTarget(target: HtmlTarget): void {
-  const key = target.selector;
-  window.clearInterval(pendingHtmlJumps.get(key));
+function scheduleHtmlAnnotationSync(): void {
+  if (context.documentKind !== "html" || !htmlFrameCapability) return;
+  window.clearInterval(annotationSyncTimer);
+  const started = Date.now();
+  syncHtmlAnnotations();
+  annotationSyncTimer = window.setInterval(() => {
+    syncHtmlAnnotations();
+    if (Date.now() - started >= htmlSyncTimeout) { window.clearInterval(annotationSyncTimer); annotationSyncTimer = undefined; markUnresolvedAfterTimeout(); }
+  }, 150);
+}
+function jumpToHtmlTarget(operationId: string, target: HtmlTarget): void {
+  window.clearInterval(pendingHtmlJumps.get(operationId));
   let attempts = 0;
-  const send = () => document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.artifactNonce, target }, "*");
+  const send = () => htmlFrame()?.contentWindow?.postMessage({ type: "richie-html-jump", correlation: context.artifactNonce, frameCapability: htmlFrameCapability, operationId, target }, "*");
   send();
-  pendingHtmlJumps.set(key, window.setInterval(() => { send(); if (++attempts === 20) window.clearInterval(pendingHtmlJumps.get(key)); }, 150));
+  pendingHtmlJumps.set(operationId, window.setInterval(() => { send(); if (++attempts >= 20) { window.clearInterval(pendingHtmlJumps.get(operationId)); pendingHtmlJumps.delete(operationId); htmlResolution.set(operationId, "unresolved"); renderFeedback(activeHtmlOperations); } }, 150));
 }
 async function refresh(): Promise<void> { const state = await fetch(endpoint("state")).then((response) => response.json()) as { operations: Operation[] }; activeHtmlOperations = state.operations; renderFeedback(state.operations); applyReviewPresentation(state.operations); renderOutline(); scheduleHtmlAnnotationSync(); }
 function revealFeedback(ids: string[]): void {
@@ -555,7 +582,7 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
       return;
     }
     if (action === "document-note") {
-      const comment = await modal({ title: "Document level note", message: "This note will be added at the top of the commented copy.", inputLabel: "Comment", confirmLabel: "Add note" });
+      const comment = await modal({ title: "Document level note", message: context.documentKind === "html" ? "This note will be included in the JSON handoff; the HTML source will not be changed." : "This note will be added at the top of the commented copy.", inputLabel: "Comment", confirmLabel: "Add note" });
       if (comment === undefined) return;
       if (typeof comment !== "string" || !comment.trim()) { await modal({ title: "Comment is empty", message: "Type a comment, or cancel the dialog.", confirmLabel: "OK" }); return; }
       await post("operations", { kind: "comment", scope: "document", placement: "start", comment });
@@ -564,19 +591,59 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
   } catch (error) { await modal({ title: "Richie could not complete the action", message: (error as Error).message, confirmLabel: "OK" }); }
 });
 if (context.documentKind === "html") {
-  document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => scheduleHtmlAnnotationSync());
+  document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => {
+    htmlFrameCapability = undefined;
+    htmlResolution.forEach((_value, id) => { if (activeHtmlOperations.some((operation) => operation.id === id)) htmlResolution.set(id, "pending"); });
+    scheduleHtmlAnnotationSync();
+  });
   window.addEventListener("message", async (event) => {
-  const frame = document.querySelector<HTMLIFrameElement>("#html-artifact"); const message = event.data as { type?: string; correlation?: string; kind?: string; target?: HtmlTarget; selector?: string; resolved?: boolean };
-  if (event.source !== frame?.contentWindow || message.correlation !== context.artifactNonce) return;
-  if (message.type === "richie-html-ready") { scheduleHtmlAnnotationSync(); return; }
-  if (message.type === "richie-html-annotations-applied") { window.clearInterval(annotationSyncTimer); return; }
-  if (message.type === "richie-html-resolved") {
-    window.clearInterval(pendingHtmlJumps.get(message.selector ?? ""));
-    if (!message.resolved) document.querySelectorAll<HTMLElement>(".operation-card").forEach(card => { if (card.textContent?.includes(message.selector ?? "")) card.dataset.unresolved = "true"; });
-    return;
-  }
-  if (message.type !== "richie-html-target" || !message.target || !message.kind) return;
-  try { let input: string | boolean | undefined = true; if (message.kind === "comment") input = await modal({ title:"Add comment", inputLabel:"Comment", confirmLabel:"Add comment" }); else if (message.kind === "replace") input = await modal({ title:"Replace", inputLabel:"Replacement", confirmLabel:"Replace" }); if (input === undefined || (typeof input === "string" && !input.trim())) return; await post("operations", { kind: message.kind, scope: "range", target: message.target, ...(message.kind === "comment" ? {comment: input} : message.kind === "replace" ? {replacement: input} : {}) }); await refresh(); } catch (error) { await modal({title:"Richie could not save the review",message:(error as Error).message,confirmLabel:"OK"}); }
+    const frame = htmlFrame();
+    if (event.source !== frame?.contentWindow || !event.data || typeof event.data !== "object" || Array.isArray(event.data)) return;
+    const message = event.data as Record<string, unknown>;
+    if (message.correlation !== context.artifactNonce || typeof message.type !== "string") return;
+    if (message.type === "richie-html-ready") {
+      if (typeof message.frameCapability !== "string" || message.frameCapability.length < 8 || message.frameCapability.length > 256) return;
+      htmlFrameCapability = message.frameCapability; scheduleHtmlAnnotationSync(); return;
+    }
+    if (!htmlFrameCapability || message.frameCapability !== htmlFrameCapability) return;
+    if (message.type === "richie-html-annotations-applied") {
+      const resolvedIds = Array.isArray(message.resolvedIds) ? message.resolvedIds.filter((id): id is string => typeof id === "string") : [];
+      const unresolvedIds = Array.isArray(message.unresolvedIds) ? message.unresolvedIds.filter((id): id is string => typeof id === "string") : [];
+      const expected = activeHtmlOperations.filter((operation) => operation.status === "open" && operation.target).map((operation) => operation.id);
+      let changed = false;
+      expected.forEach((id) => {
+        const next = resolvedIds.includes(id) ? "resolved" : unresolvedIds.includes(id) ? "unresolved" : "pending";
+        if (htmlResolution.get(id) !== next) changed = true;
+        htmlResolution.set(id, next);
+      });
+      if (changed) renderFeedback(activeHtmlOperations);
+      if (expected.every((id) => htmlResolution.get(id) === "resolved")) { window.clearInterval(annotationSyncTimer); annotationSyncTimer = undefined; }
+      else if (annotationSyncTimer === undefined) scheduleHtmlAnnotationSync();
+      return;
+    }
+    if (message.type === "richie-html-resolved") {
+      if (typeof message.operationId !== "string") return;
+      if (message.resolved === true) { window.clearInterval(pendingHtmlJumps.get(message.operationId)); pendingHtmlJumps.delete(message.operationId); htmlResolution.set(message.operationId, "resolved"); renderFeedback(activeHtmlOperations); }
+      return;
+    }
+    if (message.type === "richie-html-feedback") {
+      if (!Array.isArray(message.ids)) return;
+      const ids = message.ids.filter((id): id is string => typeof id === "string" && id.length <= 128);
+      if (ids.length) revealFeedback(ids);
+      return;
+    }
+    if (message.type !== "richie-html-target" || (message.kind !== "comment" && message.kind !== "replace" && message.kind !== "delete")) return;
+    const target = parseHtmlTarget(message.target);
+    if (!target) return;
+    try {
+      let input: string | boolean | undefined = true;
+      if (message.kind === "comment") input = await modal({ title: "Add comment", message: `Commenting on: ${excerpt(target.type === "mermaid-node" ? target.label : target.type === "html-text-range" ? target.exactText : target.text)}`, inputLabel: "Comment", confirmLabel: "Add comment" });
+      else if (message.kind === "replace") input = await modal({ title: "Replace", message: `Replacing: ${excerpt(target.type === "mermaid-node" ? target.label : target.type === "html-text-range" ? target.exactText : target.text)}`, inputLabel: "Replacement", confirmLabel: "Replace" });
+      if (input === undefined || (typeof input === "string" && !input.trim())) return;
+      const scope = target.type === "html-text-range" ? "range" : "block";
+      await post("operations", { kind: message.kind, scope, target, ...(message.kind === "comment" ? { comment: input } : message.kind === "replace" ? { replacement: input } : {}) });
+      await refresh();
+    } catch (error) { await modal({ title: "Richie could not save the review", message: (error as Error).message, confirmLabel: "OK" }); }
   });
 }
 refresh();
