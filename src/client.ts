@@ -549,10 +549,14 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
 if (context.documentKind === "html") {
   document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => syncHtmlAnnotations());
   window.addEventListener("message", async (event) => {
-  const resolved = event.data as { type?: string; correlation?: string; selector?: string; resolved?: boolean };
-  if (event.source === document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow && resolved.type === "richie-html-resolved" && resolved.correlation === context.artifactNonce && !resolved.resolved) document.querySelectorAll<HTMLElement>(".operation-card").forEach(card => { if (card.textContent?.includes(resolved.selector ?? "")) card.dataset.unresolved = "true"; });
-  const frame = document.querySelector<HTMLIFrameElement>("#html-artifact"); const message = event.data as { type?: string; correlation?: string; kind?: string; target?: HtmlTarget };
-  if (event.source !== frame?.contentWindow || message.type !== "richie-html-target" || message.correlation !== context.artifactNonce || !message.target || !message.kind) return;
+  const frame = document.querySelector<HTMLIFrameElement>("#html-artifact"); const message = event.data as { type?: string; correlation?: string; kind?: string; target?: HtmlTarget; selector?: string; resolved?: boolean };
+  if (event.source !== frame?.contentWindow || message.correlation !== context.artifactNonce) return;
+  if (message.type === "richie-html-ready") { syncHtmlAnnotations(); return; }
+  if (message.type === "richie-html-resolved") {
+    if (!message.resolved) document.querySelectorAll<HTMLElement>(".operation-card").forEach(card => { if (card.textContent?.includes(message.selector ?? "")) card.dataset.unresolved = "true"; });
+    return;
+  }
+  if (message.type !== "richie-html-target" || !message.target || !message.kind) return;
   try { let input: string | boolean | undefined = true; if (message.kind === "comment") input = await modal({ title:"Add comment", inputLabel:"Comment", confirmLabel:"Add comment" }); else if (message.kind === "replace") input = await modal({ title:"Replace", inputLabel:"Replacement", confirmLabel:"Replace" }); if (input === undefined || (typeof input === "string" && !input.trim())) return; await post("operations", { kind: message.kind, scope: "range", target: message.target, ...(message.kind === "comment" ? {comment: input} : message.kind === "replace" ? {replacement: input} : {}) }); await refresh(); } catch (error) { await modal({title:"Richie could not save the review",message:(error as Error).message,confirmLabel:"OK"}); }
   });
 }

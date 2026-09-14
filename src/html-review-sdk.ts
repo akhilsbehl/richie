@@ -150,7 +150,10 @@ document.addEventListener("mouseup",()=>setTimeout(()=>{
 },0));
 
 function resolve(target:Record<string,unknown>): Element|undefined { const s=target.selector;if(typeof s!=="string")return;let all:Element[];try{all=Array.from(document.querySelectorAll(s));}catch{return;} if(all.length!==1)return;const el=all[0];if(target.type==="html-element" && (el.tagName.toLowerCase()!==target.tag || !samePath(el,document,target.path) || cap(el.textContent??"")!==target.text))return;if(target.type==="mermaid-node" && (el.id!==target.nodeId && selector(el)!==target.nodeId || cap(el.textContent??"")!==target.label))return;if(target.type==="html-text-range" && (!samePath(el,document,target.path) && selector(el)!==target.commonAncestorSelector))return el; }
+const announceReady = () => parent.postMessage({type:"richie-html-ready",correlation},"*");
+const readyTimer = window.setInterval(announceReady, 250);
 function showAnnotations(operations: unknown) {
+  window.clearInterval(readyTimer);
   document.querySelectorAll(".richie-html-annotated-target").forEach(element => element.classList.remove("richie-html-annotated-target"));
   if (!Array.isArray(operations)) return;
   operations.forEach((operation) => {
@@ -167,3 +170,4 @@ window.addEventListener("message",e=>{
   if(el){el.scrollIntoView({behavior:"smooth",block:"center"});(el as HTMLElement).style.outline="3px solid #ea9d34";setTimeout(()=>{ (el as HTMLElement).style.outline=""; },1400);}
   parent.postMessage({type:"richie-html-resolved",correlation,selector:data.target.selector,resolved:Boolean(el)},"*");
 });
+announceReady();
