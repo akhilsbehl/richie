@@ -347,11 +347,12 @@ export class RichieService {
       const source = await readFile(session.sourcePath, "utf8");
       if (sha256(source) !== session.state.sourceSha256) return send(response, 409, { error: "The Markdown source changed during the review. Restore the source or abort the review." });
       if (range && (range.start.offset < 0 || range.end.offset > source.length || range.start.offset >= range.end.offset)) return send(response, 400, { error: "Invalid source range" });
-      if (session.documentKind === "html" && (!validTarget(target) || range)) return send(response, 400, { error: "A valid HTML target is required" });
-      if (session.documentKind === "markdown" && target !== undefined) return send(response, 400, { error: "HTML targets are not valid for Markdown" });
       const kind = input.kind; if (kind !== "delete" && kind !== "replace" && kind !== "comment") return send(response, 400, { error: "Invalid operation kind" });
-      const scopes: ReviewOperation["scope"][] = session.documentKind === "html" ? ["range", "block"] : ["range", "block", "section", "document", "cell", "row", "column", "media"];
       const requestedScope = typeof input.scope === "string" ? input.scope : "range";
+      const isHtmlDocumentNote = session.documentKind === "html" && requestedScope === "document" && kind === "comment" && target === undefined && range === undefined;
+      if (session.documentKind === "html" && !isHtmlDocumentNote && (!validTarget(target) || range)) return send(response, 400, { error: "A valid HTML target is required" });
+      if (session.documentKind === "markdown" && target !== undefined) return send(response, 400, { error: "HTML targets are not valid for Markdown" });
+      const scopes: ReviewOperation["scope"][] = session.documentKind === "html" ? ["range", "block", "document"] : ["range", "block", "section", "document", "cell", "row", "column", "media"];
       const scope = scopes.includes(requestedScope as ReviewOperation["scope"]) ? requestedScope as ReviewOperation["scope"] : undefined;
       if (!scope) return send(response, 400, { error: "Invalid operation scope" });
       const operation: ReviewOperation = { id: `rvw_${String(session.state.operations.length + 1).padStart(3, "0")}`, kind, status: "open", scope, range, target: target as HtmlTarget | undefined, quote: range ? source.slice(range.start.offset, range.end.offset) : target && validTarget(target) ? (target.type === "mermaid-node" ? target.label : target.text) : undefined, replacement: typeof input.replacement === "string" ? input.replacement : undefined, comment: typeof input.comment === "string" ? input.comment : undefined, placement: input.placement === "start" || input.placement === "end" ? input.placement : undefined, createdAt: new Date().toISOString() };
