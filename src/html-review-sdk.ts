@@ -149,7 +149,7 @@ document.addEventListener("mouseup",()=>setTimeout(()=>{
   menu({type:"html-text-range",selector:selector(common),commonAncestorSelector:selector(common),start:boundary(r.startContainer,r.startOffset),end:boundary(r.endContainer,r.endOffset),text:cap(s.toString()),exactText:s.toString().slice(0,2048),rect:rect(r.getBoundingClientRect())},r.getBoundingClientRect(),common);
 },0));
 
-function resolve(target:Record<string,unknown>): Element|undefined { const s=target.selector;if(typeof s!=="string")return;let all:Element[];try{all=Array.from(document.querySelectorAll(s));}catch{return;} if(all.length!==1)return;const el=all[0];if(target.type==="html-element" && (el.tagName.toLowerCase()!==target.tag || !samePath(el,document,target.path) || cap(el.textContent??"")!==target.text))return;if(target.type==="mermaid-node" && (el.id!==target.nodeId && selector(el)!==target.nodeId || cap(el.textContent??"")!==target.label))return;if(target.type==="html-text-range" && (!samePath(el,document,target.path) && selector(el)!==target.commonAncestorSelector))return el; }
+function resolve(target:Record<string,unknown>): Element|undefined { const s=target.selector;if(typeof s!=="string")return;try { const all=Array.from(document.querySelectorAll(s)); if (all.length !== 1) return; const el=all[0]; if (target.type === "html-element" && el.tagName.toLowerCase() !== target.tag) return; if (target.type === "mermaid-node" && el.id !== target.nodeId && selector(el) !== target.nodeId) return; return el; } catch { return; } }
 const announceReady = () => parent.postMessage({type:"richie-html-ready",correlation},"*");
 const readyTimer = window.setInterval(announceReady, 250);
 function showAnnotations(operations: unknown) {
