@@ -20,6 +20,7 @@ type Range = { start: Position; end: Position };
 type HtmlTarget = { type: "html-element" | "html-text-range" | "mermaid-node"; selector: string; text: string; [key: string]: unknown };
 type Operation = { id: string; kind: "delete" | "replace" | "comment"; status: string; scope: string; range?: Range; target?: HtmlTarget; comment?: string; replacement?: string; quote?: string };
 type DialogOptions = { title: string; message?: string; inputLabel?: string; inputValue?: string; confirmLabel?: string; destructive?: boolean };
+let activeHtmlOperations: Operation[] = [];
 const dialog = document.querySelector<HTMLDialogElement>("#richie-dialog")!;
 const dialogTitle = dialog.querySelector<HTMLElement>("#richie-dialog-title")!;
 const dialogMessage = dialog.querySelector<HTMLElement>("#richie-dialog-message")!;
@@ -247,6 +248,7 @@ function renderFeedback(operations: Operation[]): void {
       actions.append(edit);
     }
     const remove = document.createElement("button"); remove.textContent = "Remove"; remove.dataset.action = "remove-operation"; remove.addEventListener("click", async () => {
+      if (!await modal({ title: "Remove feedback", message: "Remove this feedback item? This cannot be undone.", confirmLabel: "Remove", destructive: true })) return;
       try { await removeOperation(operation.id); await refresh(); } catch (error) { await modal({ title: "Richie could not remove the feedback", message: (error as Error).message, confirmLabel: "OK" }); }
     }); actions.append(remove); card.append(actions); container.append(card);
   });
@@ -309,7 +311,15 @@ function moveSearch(step: number): void {
   searchMatches[searchIndex].startContainer.parentElement?.scrollIntoView({ behavior: "smooth", block: "center" });
   document.querySelector<HTMLOutputElement>("#search-count")!.textContent = `${searchIndex + 1}/${searchMatches.length}`;
 }
-async function refresh(): Promise<void> { const state = await fetch(endpoint("state")).then((response) => response.json()) as { operations: Operation[] }; renderFeedback(state.operations); applyReviewPresentation(state.operations); renderOutline(); }
+function syncHtmlAnnotations(operations = activeHtmlOperations): void {
+  if (context.documentKind !== "html") return;
+  document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow?.postMessage({
+    type: "richie-html-operations",
+    correlation: context.artifactNonce,
+    operations: operations.filter((operation) => operation.status === "open" && operation.target).map(({ id, kind, target }) => ({ id, kind, target })),
+  }, "*");
+}
+async function refresh(): Promise<void> { const state = await fetch(endpoint("state")).then((response) => response.json()) as { operations: Operation[] }; activeHtmlOperations = state.operations; renderFeedback(state.operations); applyReviewPresentation(state.operations); renderOutline(); syncHtmlAnnotations(); }
 function revealFeedback(ids: string[]): void {
   const cards = ids.map((id) => document.getElementById(`feedback-${id}`)).filter((card): card is HTMLElement => card instanceof HTMLElement);
   if (!cards.length) return;
@@ -536,13 +546,16 @@ document.querySelector("#toolbar")!.addEventListener("click", async (event) => {
     }
   } catch (error) { await modal({ title: "Richie could not complete the action", message: (error as Error).message, confirmLabel: "OK" }); }
 });
-if (context.documentKind === "html") window.addEventListener("message", async (event) => {
+if (context.documentKind === "html") {
+  document.querySelector<HTMLIFrameElement>("#html-artifact")?.addEventListener("load", () => syncHtmlAnnotations());
+  window.addEventListener("message", async (event) => {
   const resolved = event.data as { type?: string; correlation?: string; selector?: string; resolved?: boolean };
   if (event.source === document.querySelector<HTMLIFrameElement>("#html-artifact")?.contentWindow && resolved.type === "richie-html-resolved" && resolved.correlation === context.artifactNonce && !resolved.resolved) document.querySelectorAll<HTMLElement>(".operation-card").forEach(card => { if (card.textContent?.includes(resolved.selector ?? "")) card.dataset.unresolved = "true"; });
   const frame = document.querySelector<HTMLIFrameElement>("#html-artifact"); const message = event.data as { type?: string; correlation?: string; kind?: string; target?: HtmlTarget };
   if (event.source !== frame?.contentWindow || message.type !== "richie-html-target" || message.correlation !== context.artifactNonce || !message.target || !message.kind) return;
   try { let input: string | boolean | undefined = true; if (message.kind === "comment") input = await modal({ title:"Add comment", inputLabel:"Comment", confirmLabel:"Add comment" }); else if (message.kind === "replace") input = await modal({ title:"Replace", inputLabel:"Replacement", confirmLabel:"Replace" }); if (input === undefined || (typeof input === "string" && !input.trim())) return; await post("operations", { kind: message.kind, scope: "range", target: message.target, ...(message.kind === "comment" ? {comment: input} : message.kind === "replace" ? {replacement: input} : {}) }); await refresh(); } catch (error) { await modal({title:"Richie could not save the review",message:(error as Error).message,confirmLabel:"OK"}); }
-});
+  });
+}
 refresh();
 setupCopyButtons();
 renderMermaid();

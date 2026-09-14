@@ -25,6 +25,11 @@ function installStyles() {
   const styles = document.createElement("style");
   styles.id = "richie-html-review-styles";
   styles.textContent = `
+    .richie-html-annotated-target {
+      outline: 3px solid #b4637a !important;
+      outline-offset: 3px !important;
+      box-shadow: 0 0 0 6px rgb(180 99 122 / 18%) !important;
+    }
     .${targetClass} {
       outline: 3px solid #2563eb !important;
       outline-offset: 3px !important;
@@ -145,4 +150,20 @@ document.addEventListener("mouseup",()=>setTimeout(()=>{
 },0));
 
 function resolve(target:Record<string,unknown>): Element|undefined { const s=target.selector;if(typeof s!=="string")return;let all:Element[];try{all=Array.from(document.querySelectorAll(s));}catch{return;} if(all.length!==1)return;const el=all[0];if(target.type==="html-element" && (el.tagName.toLowerCase()!==target.tag || !samePath(el,document,target.path) || cap(el.textContent??"")!==target.text))return;if(target.type==="mermaid-node" && (el.id!==target.nodeId && selector(el)!==target.nodeId || cap(el.textContent??"")!==target.label))return;if(target.type==="html-text-range" && (!samePath(el,document,target.path) && selector(el)!==target.commonAncestorSelector))return el; }
-window.addEventListener("message",e=>{const data=e.data as {correlation?:string;type?:string;target?:Record<string,unknown>};if(e.source!==parent||data.correlation!==correlation||data.type!=="richie-html-jump"||!data.target)return;const el=resolve(data.target);if(el){el.scrollIntoView({behavior:"smooth",block:"center"});(el as HTMLElement).style.outline="3px solid #ea9d34";setTimeout(()=>{ (el as HTMLElement).style.outline=""; },1400);} parent.postMessage({type:"richie-html-resolved",correlation,selector:data.target.selector,resolved:Boolean(el)},"*");});
+function showAnnotations(operations: unknown) {
+  document.querySelectorAll(".richie-html-annotated-target").forEach(element => element.classList.remove("richie-html-annotated-target"));
+  if (!Array.isArray(operations)) return;
+  operations.forEach((operation) => {
+    const target = (operation as { target?: unknown }).target;
+    if (target && typeof target === "object") resolve(target as Record<string, unknown>)?.classList.add("richie-html-annotated-target");
+  });
+}
+window.addEventListener("message",e=>{
+  const data=e.data as {correlation?:string;type?:string;target?:Record<string,unknown>;operations?:unknown};
+  if(e.source!==parent||data.correlation!==correlation)return;
+  if(data.type==="richie-html-operations") { showAnnotations(data.operations); return; }
+  if(data.type!=="richie-html-jump"||!data.target)return;
+  const el=resolve(data.target);
+  if(el){el.scrollIntoView({behavior:"smooth",block:"center"});(el as HTMLElement).style.outline="3px solid #ea9d34";setTimeout(()=>{ (el as HTMLElement).style.outline=""; },1400);}
+  parent.postMessage({type:"richie-html-resolved",correlation,selector:data.target.selector,resolved:Boolean(el)},"*");
+});
