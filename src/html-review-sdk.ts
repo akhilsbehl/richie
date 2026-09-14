@@ -29,12 +29,39 @@ function installStyles() {
       position: fixed;
       z-index: 2147483647;
       padding: 4px;
-      border: 1px solid #1d4ed8;
-      border-radius: 6px;
-      background: #fff;
-      box-shadow: 0 4px 14px rgb(15 23 42 / 24%);
+      border: 1px solid #dfd6cc;
+      border-radius: 7px;
+      background: #fffaf3;
+      box-shadow: 0 4px 14px rgb(87 82 121 / 18%);
     }
-    .richie-html-ui button { cursor: pointer; }
+    .richie-html-ui button {
+      min-height: 36px;
+      padding: 7px 11px;
+      border: 1px solid #dfd6cc;
+      border-radius: 7px;
+      background: #f2e9de;
+      color: #575279;
+      font: .9rem/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease, transform .15s ease;
+    }
+    .richie-html-ui button:hover,
+    .richie-html-ui button:focus-visible {
+      border-color: #d7827e;
+      background: #eadfd2;
+      transform: translateY(-1px);
+    }
+    .richie-html-ui button:focus-visible {
+      outline: 3px solid rgb(144 122 169 / 35%);
+      outline-offset: 2px;
+    }
+    .richie-html-ui button:nth-child(3) {
+      border-color: #b4637a;
+      background: #b4637a;
+      color: #fffaf3;
+    }
+    .richie-html-ui button:nth-child(3):hover,
+    .richie-html-ui button:nth-child(3):focus-visible { background: #9f5369; }
   `;
   document.head.append(styles);
 }
