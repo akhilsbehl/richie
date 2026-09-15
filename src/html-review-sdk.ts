@@ -170,6 +170,7 @@ function installStyles(): void {
   const style = document.createElement("style");
   style.id = "richie-html-review-styles";
   style.textContent = `
+    .richie-html-hover-target { outline: 3px solid #2563eb !important; outline-offset: 3px !important; box-shadow: 0 0 0 6px rgb(37 99 235 / 18%) !important; }
     .richie-html-annotated-target { outline: 3px solid #b4637a !important; outline-offset: 3px !important; }
     .richie-html-kind-comment { background: rgb(86 148 159 / 22%) !important; text-decoration: underline !important; text-decoration-color: #56949f !important; text-decoration-thickness: 2px !important; }
     .richie-html-kind-replace { background: rgb(234 157 52 / 28%) !important; text-decoration: line-through !important; text-decoration-color: #ea9d34 !important; text-decoration-thickness: 2px !important; }

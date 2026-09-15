@@ -12,6 +12,7 @@ test("bundles the targeted interaction regressions", async () => {
   assert.match(sdk, /frameCapability/);
   assert.match(sdk, /mermaid-node/);
   assert.match(sdk, /Unresolved|evidence/);
+  assert.match(sdk, /richie-html-hover-target/);
   assert.doesNotMatch(sdk, /__RICHIE__|reviewToken|sessionToken/);
   assert.ok(client, "Richie client bundle was not found");
   assert.match(client, /Mermaid source \(render failed\)/);

@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve, relative, extname, isAbsolute, sep } 
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadLocalImage, MediaError } from "./media.js";
-import { documentKindForPath, hasOpenOperations, newState, nextCommentedPath, readSourceSnapshot, readState, renderCommentedMarkdown, writeState } from "./store.js";
+import { documentKindForPath, hasOpenOperations, newState, nextCommentedPath, readSourceSnapshot, readState, renderCommentedMarkdown, sha256, writeState } from "./store.js";
 import { parseHtmlTarget } from "./html-target.js";
 import { ensureReviewDirectory, htmlCommentedPath, reviewSidecarPath } from "./paths.js";
 import { renderReviewHtml } from "./render.js";
@@ -346,7 +346,23 @@ export class RichieService {
     const documentKind = documentKindForPath(sourcePath);
     await ensureReviewDirectory();
     const sidecarPath = reviewSidecarPath(sourcePath, snapshot.sourceSha256);
-    const state = (await readState(sidecarPath, sourcePath)) ?? newState(sourcePath, snapshot.source, snapshot.sourceSha256);
+    let state = await readState(sidecarPath, sourcePath);
+    // Before raw-byte integrity hashes, Markdown sidecars used the decoded UTF-8
+    // string hash. Look up and upgrade that distinct name only for Markdown.
+    if (!state && documentKind === "markdown") {
+      const legacySourceSha256 = sha256(snapshot.source);
+      const legacySidecarPath = reviewSidecarPath(sourcePath, legacySourceSha256);
+      if (legacySidecarPath !== sidecarPath) {
+        state = await readState(legacySidecarPath, sourcePath);
+        if (state) {
+          if (state.sourceSha256 !== legacySourceSha256) throw new Error("The existing review sidecar targets a different source version or document kind. Finish or remove it before starting a new review.");
+          state.sourceSha256 = snapshot.sourceSha256;
+          await writeState(sidecarPath, state);
+          await rm(legacySidecarPath, { force: true });
+        }
+      }
+    }
+    state ??= newState(sourcePath, snapshot.source, snapshot.sourceSha256);
     if (state.sourceSha256 !== snapshot.sourceSha256 || state.documentKind !== documentKind) throw new Error("The existing review sidecar targets a different source version or document kind. Finish or remove it before starting a new review.");
     const session: Session = { id: randomUUID(), token: randomUUID(), sourcePath, source: snapshot.source, documentKind, artifactNonce: randomUUID(), sidecarPath, state };
     this.sessions.set(session.id, session); this.byPath.set(sourcePath, session.id);

@@ -4,6 +4,18 @@ Richie is a local visual review layer for versioned Markdown and local HTML arti
 
 See the [user guide](user-guide.md) for installation, review, and handoff instructions.
 
+## CLI review workflow
+
+Richie accepts readable `.md`, `.html`, and `.htm` files. Start a review and retain its session ID, then wait for the result:
+
+```sh
+richie review --json path/to/draft.md
+richie review --json path/to/report.html
+richie poll <session-id>
+```
+
+`review --json` returns `{ "id", "url" }`; `poll` returns `{ "status": "finished", "file" }` or `{ "status": "aborted" }`. For Markdown, a finished review with feedback writes the next available `<name>-commented.md`; without feedback, `file` is the original Markdown path. For HTML, a finished review with feedback writes exactly `<name>-commented.json` beside the artifact; without feedback, `file` is the original HTML path. Richie never modifies the canonical Markdown or HTML input.
+
 The review surface has document navigation on the left, review actions and feedback inventory on the right, inline range highlights, Markdown image review, math review, and document search. Replacements show the original struck through with the proposal inline. Clicking review markup reveals and highlights its matching feedback cards. The user guide and search controls remain fixed while the outline scrolls. The review actions remain fixed while the feedback inventory scrolls.
 
 Richie renders inline, linked, and reference-style Markdown images. Hover an image to comment on, replace, or delete its complete Markdown syntax. Remote images load directly over HTTPS. Local PNG, JPEG, GIF, WebP, and AVIF files load through the authenticated review session, including absolute and parent-relative paths. SVG and raw HTML media remain disabled.
