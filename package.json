@@ -1,6 +1,6 @@
 {
   "name": "richie",
-  "version": "0.1.0",
+  "version": "0.99.1",
   "private": true,
   "type": "module",
   "bin": {
@@ -14,7 +14,8 @@
     "check": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "start": "node dist/src/service.js",
-    "review": "node dist/src/cli.js review"
+    "review": "node dist/src/cli.js review",
+    "browser:test": "npm run build && RICHIE_HTTP_PORT=${RICHIE_HTTP_PORT:-43174} playwright test -c playwright.config.ts"
   },
   "dependencies": {
     "highlight.js": "^11.11.1",
@@ -29,6 +30,7 @@
     "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"

@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   if (args[0] === "review") {
     const json = args[1] === "--json";
     const input = args[json ? 2 : 1];
-    if (!input || args.length !== (json ? 3 : 2)) throw new Error("Usage: richie review [--json] path/to/draft-vNN.md");
+    if (!input || args.length !== (json ? 3 : 2)) throw new Error("Usage: richie review [--json] path/to/draft-vNN.md|report.html");
     const sourcePath = await realpath(input);
     const result = await control("/sessions", { sourcePath }) as { id: string; url: string };
     spawn("xdg-open", [result.url], { detached: true, stdio: "ignore" }).unref();

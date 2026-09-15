@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer, request, type IncomingHttpHeaders } from "node:http";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { ensureReviewDirectory, reviewSidecarPath } from "../src/paths.js";
+import { sha256 } from "../src/store.js";
 import { RichieService, renderReviewPage } from "../src/service.js";
 
 test("renders a compact accessible breadcrumb for the reviewed file", () => {
@@ -90,6 +92,47 @@ test("renders authenticated local image URLs and media presentation styles", () 
   assert.match(html, /content:"Delete image"/);
   assert.match(html, /Replacement: /);
   assert.match(html, /\.math-target/);
+});
+
+test("migrates malformed UTF-8 Markdown sidecars from decoded-string hashes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "richie-legacy-sidecar-"));
+  const sourcePath = join(directory, "draft.md");
+  const bytes = Buffer.concat([Buffer.from("# Draft\n"), Buffer.from([0xff])]);
+  const source = bytes.toString("utf8");
+  const rawSourceSha256 = sha256(bytes);
+  const legacySourceSha256 = sha256(source);
+  const rawSidecarPath = reviewSidecarPath(sourcePath, rawSourceSha256);
+  const legacySidecarPath = reviewSidecarPath(sourcePath, legacySourceSha256);
+  try {
+    await writeFile(sourcePath, bytes);
+    await ensureReviewDirectory();
+    await writeFile(legacySidecarPath, `${JSON.stringify({
+      schemaVersion: 1, source: sourcePath, sourceSha256: legacySourceSha256, createdAt: "2026-01-01T00:00:00Z",
+      operations: [{ id: "rvw_001", kind: "comment", status: "open", scope: "document", comment: "Resume this feedback.", createdAt: "2026-01-01T00:00:00Z" }],
+    })}\n`);
+    const service = new RichieService();
+    const session = await service.createSession(sourcePath);
+    const migrated = JSON.parse(await readFile(rawSidecarPath, "utf8")) as { sourceSha256: string; documentKind: string; operations: Array<{ comment: string }> };
+    assert.equal(migrated.sourceSha256, rawSourceSha256);
+    assert.equal(migrated.documentKind, "markdown");
+    assert.deepEqual(migrated.operations, [{ id: "rvw_001", kind: "comment", status: "open", scope: "document", comment: "Resume this feedback.", createdAt: "2026-01-01T00:00:00Z" }]);
+    await assert.rejects(readFile(legacySidecarPath, "utf8"), { code: "ENOENT" });
+    const server = createServer((incoming, outgoing) => { void service.handle(incoming, outgoing); });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const state = await new Promise<Buffer>((resolve, reject) => {
+        const response = request({ hostname: "127.0.0.1", port: (server.address() as { port: number }).port, path: `/api/state/${session.id}?token=${encodeURIComponent(new URL(session.url).searchParams.get("token")!)}`, headers: { host: "127.0.0.1:43173" } }, (incoming) => {
+          const chunks: Buffer[] = []; incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk))); incoming.on("end", () => resolve(Buffer.concat(chunks)));
+        });
+        response.on("error", reject); response.end();
+      });
+      assert.equal(JSON.parse(state.toString("utf8")).operations[0].comment, "Resume this feedback.");
+    } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+  } finally {
+    await rm(rawSidecarPath, { force: true });
+    await rm(legacySidecarPath, { force: true });
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("serves authenticated raster images from absolute paths outside the document directory", async () => {

@@ -5,6 +5,6 @@ export default defineConfig({
   build: {
     outDir: "dist/public",
     emptyOutDir: true,
-    lib: { entry: "src/client.ts", formats: ["es"], fileName: "client" }
+    lib: { entry: { client: "src/client.ts", "html-review-sdk": "src/html-review-sdk.ts" }, formats: ["es"], fileName: "[name]" }
   }
 });

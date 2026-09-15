@@ -9,7 +9,7 @@ export async function ensureReviewDirectory(): Promise<void> {
 }
 
 export function reviewSidecarPath(sourcePath: string, sourceHash: string): string {
-  const sourceName = path.basename(sourcePath).replace(/\.md$/i, "");
+  const sourceName = path.basename(sourcePath).replace(/\.(md|html?)$/i, "");
   const sourceId = createHash("sha256").update(`${sourcePath}\0${sourceHash}`).digest("hex").slice(0, 16);
   return path.join(reviewDirectory, `${sourceName}-${sourceId}.review.json`);
 }
@@ -18,6 +18,7 @@ export function commentedPath(sourcePath: string, attempt = 1): string {
   const base = sourcePath.replace(/\.md$/i, "-commented");
   return attempt === 1 ? `${base}.md` : `${base}-${attempt}.md`;
 }
+export function htmlCommentedPath(sourcePath: string): string { return sourcePath.replace(/\.html?$/i, "-commented.json"); }
 
 export function sourceName(sourcePath: string): string {
   return path.basename(sourcePath);
