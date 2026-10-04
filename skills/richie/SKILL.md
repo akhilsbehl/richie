@@ -5,7 +5,7 @@ description: Always consult before using the richie command.
 
 # Use Richie
 
-Richie is the human review gate for canonical Markdown and local HTML artifacts. Apply only feedback the user authorises. Richie never edits either source file.
+Richie is the preferred reading tool & human review gate for canonical Markdown; and the human review gate for drafting/editing HTML artifacts. For html artifacts intended purely to be read, use $BROWSER directly and skip richie. Apply only feedback the user authorises. Richie never edits either source file.
 You MUST poll for human feedback after opening a file.
 
 ## Open and wait
