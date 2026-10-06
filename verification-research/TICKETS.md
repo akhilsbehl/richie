@@ -1,6 +1,6 @@
 # Implementation tickets
 
-Each ticket below is mirrored as a GitHub issue on `akhilsbehl/richie`. References like `{{QA-03}}` are replaced by issue numbers in the GitHub copies; the table in [§ Sequence](#sequence) maps keys to numbers.
+Each ticket below is mirrored as a GitHub issue on `akhilsbehl/richie`. In the ticket bodies below, `{{KEY}}` means "the issue for that key"; the GitHub copies show real numbers. Epic: #27.
 
 Read [`HANDOFF.md`](HANDOFF.md) before starting any ticket.
 
@@ -10,23 +10,23 @@ Work top to bottom. Tickets in the same wave have no dependency on each other an
 
 | Wave | Key | Title | Depends on | GitHub |
 |---|---|---|---|---|
-| — | QA-00 | Epic: black-box verification system | — | {{QA-00}} |
-| 1 | B-2 | Remove shell search entirely | — | {{B-2}} |
-| 1 | QA-01 | Isolation seams and removal of the client-deck test | — | {{QA-01}} |
-| 1 | QA-02 | Accessible names for shell and in-frame controls | — | {{QA-02}} |
-| 2 | QA-03 | QA scaffold: runner, harness, doctor, summary, corpus | QA-01 | {{QA-03}} |
-| 3 | QA-04 | Feature map and map check (warn mode) | QA-03 | {{QA-04}} |
-| 3 | QA-06 | HTML contract: security matrix, headers, token absence, envelope | QA-03 | {{QA-06}} |
-| 3 | QA-08 | Markdown contract: replay of real pairs plus synthetic scenarios | QA-03 | {{QA-08}} |
-| 4 | QA-05 | Kind adapters, real-input helper, shared-core lifecycle tests | B-2, QA-02, QA-03, QA-04 | {{QA-05}} |
-| 5 | QA-07 | HTML journeys with real input | QA-05, QA-06 | {{QA-07}} |
-| 5 | QA-09 | Markdown journeys with real input | QA-05, QA-08 | {{QA-09}} |
-| 6 | QA-10 | Property tests P1–P8 | QA-06, QA-07, QA-08 | {{QA-10}} |
-| 6 | QA-11 | Visual baselines | QA-07, QA-09 | {{QA-11}} |
-| 7 | QA-12 | Mutation testing | QA-06, QA-08, QA-10 | {{QA-12}} |
-| 8 | QA-13 | Strict map, richie-qa skill, pre-push hook | QA-04 … QA-12 | {{QA-13}} |
-| 9 | QA-14 | Retire legacy tests and manual plans | QA-13 | {{QA-14}} |
-| — | B-1 | Bug: HTML `c`/`r`/`d` shortcuts inert once the in-frame menu opens | — (owner verifies by hand first) | {{B-1}} |
+| — | QA-00 | Epic: black-box verification system | — | [#27](https://github.com/akhilsbehl/richie/issues/27) |
+| 1 | B-2 | Remove shell search entirely | — | [#28](https://github.com/akhilsbehl/richie/issues/28) |
+| 1 | QA-01 | Isolation seams and removal of the client-deck test | — | [#29](https://github.com/akhilsbehl/richie/issues/29) |
+| 1 | QA-02 | Accessible names for shell and in-frame controls | — | [#30](https://github.com/akhilsbehl/richie/issues/30) |
+| 2 | QA-03 | QA scaffold: runner, harness, doctor, summary, corpus | QA-01 | [#31](https://github.com/akhilsbehl/richie/issues/31) |
+| 3 | QA-04 | Feature map and map check (warn mode) | QA-03 | [#32](https://github.com/akhilsbehl/richie/issues/32) |
+| 3 | QA-06 | HTML contract: security matrix, headers, token absence, envelope | QA-03 | [#33](https://github.com/akhilsbehl/richie/issues/33) |
+| 3 | QA-08 | Markdown contract: replay of real pairs plus synthetic scenarios | QA-03 | [#34](https://github.com/akhilsbehl/richie/issues/34) |
+| 4 | QA-05 | Kind adapters, real-input helper, shared-core lifecycle tests | B-2, QA-02, QA-03, QA-04 | [#35](https://github.com/akhilsbehl/richie/issues/35) |
+| 5 | QA-07 | HTML journeys with real input | QA-05, QA-06 | [#36](https://github.com/akhilsbehl/richie/issues/36) |
+| 5 | QA-09 | Markdown journeys with real input | QA-05, QA-08 | [#37](https://github.com/akhilsbehl/richie/issues/37) |
+| 6 | QA-10 | Property tests P1–P8 | QA-06, QA-07, QA-08 | [#38](https://github.com/akhilsbehl/richie/issues/38) |
+| 6 | QA-11 | Visual baselines | QA-07, QA-09 | [#39](https://github.com/akhilsbehl/richie/issues/39) |
+| 7 | QA-12 | Mutation testing | QA-06, QA-08, QA-10 | [#40](https://github.com/akhilsbehl/richie/issues/40) |
+| 8 | QA-13 | Strict map, richie-qa skill, pre-push hook | QA-04 … QA-12 | [#41](https://github.com/akhilsbehl/richie/issues/41) |
+| 9 | QA-14 | Retire legacy tests and manual plans | QA-13 | [#42](https://github.com/akhilsbehl/richie/issues/42) |
+| — | B-1 | Bug: HTML `c`/`r`/`d` shortcuts inert once the in-frame menu opens | — (owner verifies by hand first) | [#43](https://github.com/akhilsbehl/richie/issues/43) |
 
 B-1 is not part of the epic. Do not work it in the implementation session unless the owner asks.
 

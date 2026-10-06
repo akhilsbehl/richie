@@ -17,7 +17,7 @@ Read in this order:
 
 1. [`README.md`](README.md): the design. §2 contract surfaces S1–S6. §4 layers L1–L5, the kind matrix (§4.4), real input (§4.7.1). §5 risks and owner decisions. §6 seams.
 2. [`feature-inventory.md`](feature-inventory.md): every behaviour with an ID (CO-, HT-, MT-, MI-, MD-). Rows marked REMOVED, ACCEPTED GAP, or DEFERRED are out of scope.
-3. [`TICKETS.md`](TICKETS.md): the tickets, in order, with dependencies and acceptance criteria. Each is also a GitHub issue on `akhilsbehl/richie` (numbers in the sequence table).
+3. [`TICKETS.md`](TICKETS.md): the tickets, in order, with dependencies and acceptance criteria. Each is also a GitHub issue on `akhilsbehl/richie`: epic #27, tickets #28–#42 in sequence order, bug B-1 is #43 (not in scope).
 4. [`examples.md`](examples.md): code sketches. They are illustrations, not tested code; adapt them.
 5. [`fixtures/README.md`](fixtures/README.md): the test documents and how they were checked.
 6. [`skill-draft/SKILL.md`](skill-draft/SKILL.md): the operator skill you install in QA-13.
